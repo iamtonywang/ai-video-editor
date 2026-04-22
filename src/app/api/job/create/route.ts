@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { jobQueue } from '@/lib/queue'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_JOB_TYPE = [
@@ -78,6 +79,30 @@ export async function POST(req: NextRequest) {
     if (!data) {
       return NextResponse.json(
         { ok: false, error: 'JOB_CREATE_NO_DATA' },
+        { status: 500 }
+      )
+    }
+
+    try {
+      await jobQueue.add('job', {
+        job_type,
+        payload: {
+          job_id: data.id,
+          project_id,
+        },
+      })
+    } catch (error) {
+      console.error('POST /api/job/create enqueue error:', error)
+
+      const errorDetail =
+        error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'JOB_ENQUEUE_FAILED',
+          error_detail: errorDetail,
+        },
         { status: 500 }
       )
     }
