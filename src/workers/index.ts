@@ -236,22 +236,77 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       error_message: null,
     })
 
-    const gateEvaluationInsert = await supabaseServer.from('gate_evaluations').insert({
-      project_id: payload.project_id,
-      scope_type: 'job',
-      gate_type: 'identity',
-      job_id: payload.job_id,
-      decision: 'passed',
-      measured_value: null,
-      threshold: null,
-    })
-    if (gateEvaluationInsert.error) {
-      await addJobEvent({
+    const gateConfigResult = await supabaseServer
+      .from('quality_gates')
+      .select('threshold')
+      .eq('project_id', payload.project_id)
+      .eq('gate_type', 'identity')
+      .eq('scope_type', 'project')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (gateConfigResult.error) {
+      try {
+        await addJobEvent({
+          job_id: payload.job_id,
+          level: 'error',
+          step: 'build_identity_gate_config_read_failed',
+          message: `quality_gates_read_failed: ${gateConfigResult.error.message}`,
+        })
+      } catch (eventInsertError) {
+        console.error(
+          'job_events_gate_config_read_failed_insert_error:',
+          getErrorMessage(eventInsertError)
+        )
+      }
+    } else if (!gateConfigResult.data) {
+      try {
+        await addJobEvent({
+          job_id: payload.job_id,
+          level: 'error',
+          step: 'build_identity_gate_config_missing',
+          message: 'quality_gates_identity_project_missing',
+        })
+      } catch (eventInsertError) {
+        console.error(
+          'job_events_gate_config_missing_insert_error:',
+          getErrorMessage(eventInsertError)
+        )
+      }
+    } else {
+      const measuredValue = payload.build_score ?? null
+      const thresholdValue = gateConfigResult.data.threshold
+      const decision =
+        measuredValue != null && measuredValue >= thresholdValue ? 'passed' : 'blocked'
+      const reasonCode =
+        decision === 'blocked' ? 'IDENTITY_SCORE_BELOW_THRESHOLD' : null
+
+      const gateEvaluationInsert = await supabaseServer.from('gate_evaluations').insert({
+        project_id: payload.project_id,
+        scope_type: 'job',
+        gate_type: 'identity',
         job_id: payload.job_id,
-        level: 'error',
-        step: 'build_identity_gate_record_failed',
-        message: `gate_evaluations_insert_failed: ${gateEvaluationInsert.error.message}`,
+        measured_value: measuredValue,
+        threshold: thresholdValue,
+        decision,
+        reason_code: reasonCode,
       })
+      if (gateEvaluationInsert.error) {
+        try {
+          await addJobEvent({
+            job_id: payload.job_id,
+            level: 'error',
+            step: 'build_identity_gate_record_failed',
+            message: `gate_evaluations_insert_failed: ${gateEvaluationInsert.error.message}`,
+          })
+        } catch (eventInsertError) {
+          console.error(
+            'job_events_gate_record_failed_insert_error:',
+            getErrorMessage(eventInsertError)
+          )
+        }
+      }
     }
 
     await addJobEvent({
