@@ -11,6 +11,12 @@ type AnalyzePayload = {
   force_fail?: boolean
 }
 
+type BuildIdentityPayload = {
+  job_id: string
+  project_id: string
+  force_fail?: boolean
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR'
 }
@@ -148,6 +154,77 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
   }
 }
 
+async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
+  const now = new Date().toISOString()
+
+  try {
+    await updateAnalyzeJobStatus({
+      job_id: payload.job_id,
+      status: 'running',
+      progress: 10,
+      started_at: now,
+      error_code: null,
+      error_message: null,
+    })
+
+    await addJobEvent({
+      job_id: payload.job_id,
+      level: 'info',
+      step: 'worker_received',
+      message: 'Build identity worker received job',
+    })
+
+    // Mock build_identity phase for this step.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    if (payload.force_fail) {
+      throw new Error('BUILD_IDENTITY_FORCED_FAILURE')
+    }
+
+    await updateAnalyzeJobStatus({
+      job_id: payload.job_id,
+      status: 'success',
+      progress: 100,
+      started_at: now,
+      finished_at: now,
+      error_code: null,
+      error_message: null,
+    })
+
+    await addJobEvent({
+      job_id: payload.job_id,
+      level: 'info',
+      step: 'build_identity_completed',
+      message: 'Build identity job completed',
+    })
+  } catch (error) {
+    const errorMessage = getErrorMessage(error)
+
+    try {
+      await updateAnalyzeJobStatus({
+        job_id: payload.job_id,
+        status: 'failed',
+        progress: 10,
+        started_at: now,
+        finished_at: now,
+        error_code: 'BUILD_IDENTITY_WORKER_ERROR',
+        error_message: errorMessage,
+      })
+    } catch (statusUpdateError) {
+      console.error('jobs_failed_update_failed:', getErrorMessage(statusUpdateError))
+    }
+
+    await addJobEvent({
+      job_id: payload.job_id,
+      level: 'error',
+      step: 'build_identity_failed',
+      message: errorMessage,
+    })
+
+    throw error
+  }
+}
+
 const worker = new Worker(
   'job-queue',
   async (job) => {
@@ -157,6 +234,10 @@ const worker = new Worker(
       case QUEUE_NAMES.ANALYZE:
         console.log('ANALYZE job received', payload)
         await handleAnalyzeJob(payload as AnalyzePayload)
+        break
+      case QUEUE_NAMES.BUILD_IDENTITY:
+        console.log('BUILD_IDENTITY job received', payload)
+        await handleBuildIdentityJob(payload as BuildIdentityPayload)
         break
 
       default:
