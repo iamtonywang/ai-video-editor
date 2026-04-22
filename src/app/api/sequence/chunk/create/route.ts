@@ -26,6 +26,12 @@ export async function POST(req: NextRequest) {
     const overlap_next_frames = body?.overlap_next_frames
     const identity_pass = body?.identity_pass
     const identity_attempt_count = body?.identity_attempt_count
+    const identity_score =
+      typeof body?.identity_score === 'number'
+        ? body.identity_score
+        : body?.identity_score === null
+          ? null
+          : undefined
     const render_status =
       typeof body?.render_status === 'string'
         ? body.render_status.trim()
@@ -55,7 +61,10 @@ export async function POST(req: NextRequest) {
       typeof overlap_prev_frames !== 'number' ||
       typeof overlap_next_frames !== 'number' ||
       typeof identity_pass !== 'boolean' ||
-      typeof identity_attempt_count !== 'number'
+      typeof identity_attempt_count !== 'number' ||
+      (body?.identity_score !== undefined &&
+        body?.identity_score !== null &&
+        typeof body?.identity_score !== 'number')
     ) {
       return NextResponse.json(
         { ok: false, error: 'INVALID_FIELD_TYPE' },
@@ -161,19 +170,24 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const chunkInsertPayload: Record<string, unknown> = {
+      scene_id,
+      chunk_index,
+      start_sec,
+      end_sec,
+      overlap_prev_frames,
+      overlap_next_frames,
+      identity_pass,
+      identity_attempt_count,
+      render_status,
+    }
+    if (identity_score !== undefined) {
+      chunkInsertPayload.identity_score = identity_score
+    }
+
     const { data, error } = await supabaseAdmin
       .from('sequence_chunks')
-      .insert({
-        scene_id,
-        chunk_index,
-        start_sec,
-        end_sec,
-        overlap_prev_frames,
-        overlap_next_frames,
-        identity_pass,
-        identity_attempt_count,
-        render_status,
-      })
+      .insert(chunkInsertPayload)
       .select('id, scene_id, chunk_index, start_sec, end_sec, render_status, created_at')
       .single()
 
@@ -206,6 +220,50 @@ export async function POST(req: NextRequest) {
         { ok: false, error: 'CHUNK_CREATE_NO_DATA' },
         { status: 500 }
       )
+    }
+
+    const chunkIdentityGateConfig = await supabaseAdmin
+      .from('quality_gates')
+      .select('threshold')
+      .eq('project_id', sequenceProject.data.project_id)
+      .eq('gate_type', 'identity')
+      .eq('scope_type', 'chunk')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (chunkIdentityGateConfig.error) {
+      console.error(
+        'quality_gates_chunk_identity_read_failed:',
+        chunkIdentityGateConfig.error.message
+      )
+    } else if (!chunkIdentityGateConfig.data) {
+      console.error('quality_gates_chunk_identity_missing_for_project')
+    } else if (identity_score == null) {
+      console.error('chunk_gate_score_missing')
+    } else {
+      const threshold = chunkIdentityGateConfig.data.threshold
+      const decision = identity_score >= threshold ? 'passed' : 'blocked'
+      const reasonCode =
+        decision === 'blocked' ? 'CHUNK_IDENTITY_SCORE_BELOW_THRESHOLD' : null
+
+      const gateEvaluationInsert = await supabaseAdmin.from('gate_evaluations').insert({
+        project_id: sequenceProject.data.project_id,
+        gate_type: 'identity',
+        scope_type: 'chunk',
+        chunk_id: data.id,
+        measured_value: identity_score,
+        threshold,
+        decision,
+        reason_code: reasonCode,
+      })
+
+      if (gateEvaluationInsert.error) {
+        console.error(
+          'gate_evaluations_chunk_identity_insert_failed:',
+          gateEvaluationInsert.error.message
+        )
+      }
     }
 
     return NextResponse.json({
