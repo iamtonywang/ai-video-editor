@@ -66,6 +66,30 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const latestChunkIdentityGate = await supabaseAdmin
+      .from('gate_evaluations')
+      .select('decision')
+      .eq('project_id', project_id)
+      .eq('gate_type', 'identity')
+      .eq('scope_type', 'chunk')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (latestChunkIdentityGate.error) {
+      return NextResponse.json(
+        { ok: false, error: latestChunkIdentityGate.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (latestChunkIdentityGate.data?.decision === 'blocked') {
+      return NextResponse.json(
+        { ok: false, error: 'CHUNK_IDENTITY_GATE_BLOCKED' },
+        { status: 403 }
+      )
+    }
+
     if (job_type === 'build_identity') {
       if (
         !reference_asset_id ||
