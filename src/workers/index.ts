@@ -236,6 +236,24 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       error_message: null,
     })
 
+    const gateEvaluationInsert = await supabaseServer.from('gate_evaluations').insert({
+      project_id: payload.project_id,
+      scope_type: 'job',
+      gate_type: 'identity',
+      job_id: payload.job_id,
+      decision: 'passed',
+      measured_value: null,
+      threshold: null,
+    })
+    if (gateEvaluationInsert.error) {
+      await addJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_gate_record_failed',
+        message: `gate_evaluations_insert_failed: ${gateEvaluationInsert.error.message}`,
+      })
+    }
+
     await addJobEvent({
       job_id: payload.job_id,
       level: 'info',
