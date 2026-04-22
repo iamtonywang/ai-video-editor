@@ -69,6 +69,29 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const latestIdentityGate = await supabaseAdmin
+      .from('gate_evaluations')
+      .select('decision')
+      .eq('project_id', project_id)
+      .eq('gate_type', 'identity')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (latestIdentityGate.error) {
+      return NextResponse.json(
+        { ok: false, error: latestIdentityGate.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (latestIdentityGate.data?.decision === 'blocked') {
+      return NextResponse.json(
+        { ok: false, error: 'IDENTITY_GATE_BLOCKED' },
+        { status: 403 }
+      )
+    }
+
     const { data, error } = await supabaseAdmin
       .from('sequences')
       .insert({
