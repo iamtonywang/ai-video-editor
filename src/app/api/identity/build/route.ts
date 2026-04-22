@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { jobQueue } from '@/lib/queue'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_IDENTITY_STATUS = ['building', 'ready', 'failed', 'stale']
@@ -36,38 +37,24 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const insertPayload: {
-      project_id: string
-      reference_asset_id: string
-      embedding_key: string
-      latent_base_key: string
-      anchor_manifest_key: string
-      identity_status: string
-      build_score?: number
-    } = {
-      project_id,
-      reference_asset_id,
-      embedding_key,
-      latent_base_key,
-      anchor_manifest_key,
-      identity_status,
-    }
-
-    if (typeof build_score === 'number') {
-      insertPayload.build_score = build_score
-    }
-
     const { data, error } = await supabaseAdmin
-      .from('identity_profiles')
-      .insert(insertPayload)
-      .select('id, project_id, reference_asset_id, identity_status, build_score, created_at')
+      .from('jobs')
+      .insert({
+        project_id,
+        job_type: 'build_identity',
+        status: 'queued',
+      })
+      .select('id, project_id, job_type, status, created_at')
       .single()
 
     if (error) {
-      if (error.message.includes('duplicate key')) {
+      if (
+        error.message.includes('foreign key') ||
+        error.message.includes('violates foreign key constraint')
+      ) {
         return NextResponse.json(
-          { ok: false, error: 'IDENTITY_ALREADY_EXISTS' },
-          { status: 409 }
+          { ok: false, error: 'INVALID_PROJECT_ID' },
+          { status: 400 }
         )
       }
 
@@ -77,9 +64,32 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!data) {
+    if (!data || !data.id) {
       return NextResponse.json(
-        { ok: false, error: 'IDENTITY_CREATE_NO_DATA' },
+        { ok: false, error: 'JOB_CREATE_NO_DATA' },
+        { status: 500 }
+      )
+    }
+
+    try {
+      await jobQueue.add('job', {
+        job_type: 'build_identity',
+        payload: {
+          job_id: data.id,
+          project_id,
+          reference_asset_id,
+          embedding_key,
+          latent_base_key,
+          anchor_manifest_key,
+          identity_status,
+          build_score,
+        },
+      })
+    } catch (enqueueError) {
+      const enqueueMessage =
+        enqueueError instanceof Error ? enqueueError.message : 'UNKNOWN_ERROR'
+      return NextResponse.json(
+        { ok: false, error: 'JOB_ENQUEUE_FAILED', error_detail: enqueueMessage },
         { status: 500 }
       )
     }
@@ -87,11 +97,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       data: {
-        identity_profile_id: data.id,
+        job_id: data.id,
         project_id: data.project_id,
-        reference_asset_id: data.reference_asset_id,
-        identity_status: data.identity_status,
-        build_score: data.build_score,
+        job_type: data.job_type,
+        status: data.status,
         created_at: data.created_at,
       },
     })
