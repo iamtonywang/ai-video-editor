@@ -15,6 +15,8 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR'
 }
 
+type AnalyzeJobStatus = 'running' | 'success' | 'failed'
+
 async function assertDbResult<T extends { error: { message: string } | null }>(
   label: string,
   promise: Promise<T>
@@ -44,24 +46,48 @@ async function addJobEvent(params: {
   )
 }
 
+async function updateAnalyzeJobStatus(params: {
+  job_id: string
+  status: AnalyzeJobStatus
+  progress: number
+  started_at?: string
+  finished_at?: string
+  error_code?: string | null
+  error_message?: string | null
+}) {
+  const now = new Date().toISOString()
+  await assertDbResult(
+    `jobs_${params.status}_update_failed`,
+    supabaseServer
+      .from('jobs')
+      .update({
+        status: params.status,
+        progress: params.progress,
+        started_at: params.started_at,
+        finished_at: params.finished_at,
+        updated_at: now,
+        error_code: params.error_code ?? null,
+        error_message: params.error_message ?? null,
+      })
+      .eq('id', params.job_id)
+  )
+}
+
 async function handleAnalyzeJob(payload: AnalyzePayload) {
   const now = new Date().toISOString()
 
   try {
-    await assertDbResult(
-      'jobs_running_update_failed',
-      supabaseServer
-        .from('jobs')
-        .update({
-          status: 'running',
-          progress: 10,
-          started_at: now,
-          updated_at: now,
-          error_code: null,
-          error_message: null,
-        })
-        .eq('id', payload.job_id)
-    )
+    // Locked analyze sync pattern:
+    // jobs: queued -> running -> success/failed
+    // job_events: worker_received -> analyze_completed/analyze_failed
+    await updateAnalyzeJobStatus({
+      job_id: payload.job_id,
+      status: 'running',
+      progress: 10,
+      started_at: now,
+      error_code: null,
+      error_message: null,
+    })
 
     await addJobEvent({
       job_id: payload.job_id,
@@ -77,18 +103,15 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       throw new Error('ANALYZE_FORCED_FAILURE')
     }
 
-    await assertDbResult(
-      'jobs_success_update_failed',
-      supabaseServer
-        .from('jobs')
-        .update({
-          status: 'success',
-          progress: 100,
-          finished_at: now,
-          updated_at: now,
-        })
-        .eq('id', payload.job_id)
-    )
+    await updateAnalyzeJobStatus({
+      job_id: payload.job_id,
+      status: 'success',
+      progress: 100,
+      started_at: now,
+      finished_at: now,
+      error_code: null,
+      error_message: null,
+    })
 
     await addJobEvent({
       job_id: payload.job_id,
@@ -99,18 +122,18 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
   } catch (error) {
     const errorMessage = getErrorMessage(error)
 
-    const failedUpdate = await supabaseServer
-      .from('jobs')
-      .update({
+    try {
+      await updateAnalyzeJobStatus({
+        job_id: payload.job_id,
         status: 'failed',
+        progress: 10,
+        started_at: now,
+        finished_at: now,
         error_code: 'ANALYZE_WORKER_ERROR',
         error_message: errorMessage,
-        finished_at: now,
-        updated_at: now,
       })
-      .eq('id', payload.job_id)
-    if (failedUpdate.error) {
-      console.error('jobs_failed_update_failed:', failedUpdate.error.message)
+    } catch (statusUpdateError) {
+      console.error('jobs_failed_update_failed:', getErrorMessage(statusUpdateError))
     }
 
     await addJobEvent({
@@ -120,6 +143,7 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       message: errorMessage,
     })
 
+    // TODO: Insert recovery_events only for real recovery actions with an allowed event_type mapping.
     throw error
   }
 }
