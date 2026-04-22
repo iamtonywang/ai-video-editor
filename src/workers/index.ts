@@ -2,6 +2,8 @@ import { Worker } from 'bullmq'
 import { redisConnection } from '@/lib/queue/redis'
 import { QUEUE_NAMES } from '@/lib/queue'
 
+console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
+
 const worker = new Worker(
   'job-queue',
   async (job) => {

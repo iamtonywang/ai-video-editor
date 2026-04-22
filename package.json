@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "worker": "node --env-file=.env.local --import tsx src/workers/index.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.2",
