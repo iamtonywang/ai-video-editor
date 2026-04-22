@@ -14,6 +14,12 @@ type AnalyzePayload = {
 type BuildIdentityPayload = {
   job_id: string
   project_id: string
+  reference_asset_id: string
+  embedding_key: string
+  latent_base_key: string
+  anchor_manifest_key: string
+  identity_status: string
+  build_score?: number
   force_fail?: boolean
 }
 
@@ -181,6 +187,23 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       throw new Error('BUILD_IDENTITY_FORCED_FAILURE')
     }
 
+    const createIdentity = await supabaseServer
+      .from('identity_profiles')
+      .insert({
+        project_id: payload.project_id,
+        reference_asset_id: payload.reference_asset_id,
+        embedding_key: payload.embedding_key,
+        latent_base_key: payload.latent_base_key,
+        anchor_manifest_key: payload.anchor_manifest_key,
+        identity_status: payload.identity_status,
+        build_score: payload.build_score,
+      })
+      .select('id')
+      .single()
+    if (createIdentity.error) {
+      throw new Error(`identity_profiles_insert_failed: ${createIdentity.error.message}`)
+    }
+
     await updateAnalyzeJobStatus({
       job_id: payload.job_id,
       status: 'success',
@@ -196,6 +219,7 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       level: 'info',
       step: 'build_identity_completed',
       message: 'Build identity job completed',
+      payload: { identity_profile_id: createIdentity.data.id },
     })
   } catch (error) {
     const errorMessage = getErrorMessage(error)

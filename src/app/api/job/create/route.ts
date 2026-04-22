@@ -18,6 +18,8 @@ const ALLOWED_STATUS = [
   'canceled',
 ]
 
+const ALLOWED_IDENTITY_STATUS = ['building', 'ready', 'failed', 'stale']
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
@@ -27,6 +29,21 @@ export async function POST(req: NextRequest) {
       typeof body?.job_type === 'string' ? body.job_type.trim() : ''
     const status =
       typeof body?.status === 'string' ? body.status.trim() : ''
+    const reference_asset_id = body?.reference_asset_id
+    const embedding_key =
+      typeof body?.embedding_key === 'string' ? body.embedding_key.trim() : ''
+    const latent_base_key =
+      typeof body?.latent_base_key === 'string'
+        ? body.latent_base_key.trim()
+        : ''
+    const anchor_manifest_key =
+      typeof body?.anchor_manifest_key === 'string'
+        ? body.anchor_manifest_key.trim()
+        : ''
+    const identity_status =
+      typeof body?.identity_status === 'string' ? body.identity_status.trim() : ''
+    const build_score =
+      typeof body?.build_score === 'number' ? body.build_score : undefined
 
     if (!project_id || !job_type || !status) {
       return NextResponse.json(
@@ -47,6 +64,28 @@ export async function POST(req: NextRequest) {
         { ok: false, error: 'INVALID_STATUS' },
         { status: 400 }
       )
+    }
+
+    if (job_type === 'build_identity') {
+      if (
+        !reference_asset_id ||
+        !embedding_key ||
+        !latent_base_key ||
+        !anchor_manifest_key ||
+        !identity_status
+      ) {
+        return NextResponse.json(
+          { ok: false, error: 'BUILD_IDENTITY_PAYLOAD_REQUIRED' },
+          { status: 400 }
+        )
+      }
+
+      if (!ALLOWED_IDENTITY_STATUS.includes(identity_status)) {
+        return NextResponse.json(
+          { ok: false, error: 'INVALID_IDENTITY_STATUS' },
+          { status: 400 }
+        )
+      }
     }
 
     const { data, error } = await supabaseAdmin
@@ -84,12 +123,26 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      const queuePayload =
+        job_type === 'build_identity'
+          ? {
+              job_id: data.id,
+              project_id,
+              reference_asset_id,
+              embedding_key,
+              latent_base_key,
+              anchor_manifest_key,
+              identity_status,
+              build_score,
+            }
+          : {
+              job_id: data.id,
+              project_id,
+            }
+
       await jobQueue.add('job', {
         job_type,
-        payload: {
-          job_id: data.id,
-          project_id,
-        },
+        payload: queuePayload,
       })
     } catch (error) {
       console.error('POST /api/job/create enqueue error:', error)
