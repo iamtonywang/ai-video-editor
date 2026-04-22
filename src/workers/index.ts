@@ -45,8 +45,9 @@ async function addJobEvent(params: {
 }
 
 async function handleAnalyzeJob(payload: AnalyzePayload) {
+  const now = new Date().toISOString()
+
   try {
-    const now = new Date().toISOString()
     await assertDbResult(
       'jobs_running_update_failed',
       supabaseServer
@@ -55,6 +56,7 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
           status: 'running',
           progress: 10,
           started_at: now,
+          updated_at: now,
           error_code: null,
           error_message: null,
         })
@@ -66,7 +68,6 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       level: 'info',
       step: 'worker_received',
       message: 'Analyze worker received job',
-      payload: { project_id: payload.project_id },
     })
 
     // Mock analyze phase for this step.
@@ -83,7 +84,8 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
         .update({
           status: 'success',
           progress: 100,
-          finished_at: new Date().toISOString(),
+          finished_at: now,
+          updated_at: now,
         })
         .eq('id', payload.job_id)
     )
@@ -103,7 +105,8 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
         status: 'failed',
         error_code: 'ANALYZE_WORKER_ERROR',
         error_message: errorMessage,
-        finished_at: new Date().toISOString(),
+        finished_at: now,
+        updated_at: now,
       })
       .eq('id', payload.job_id)
     if (failedUpdate.error) {
@@ -115,20 +118,7 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       level: 'error',
       step: 'analyze_failed',
       message: errorMessage,
-      payload: { project_id: payload.project_id },
     })
-
-    await assertDbResult(
-      'recovery_events_insert_failed',
-      supabaseServer.from('recovery_events').insert({
-        project_id: payload.project_id,
-        job_id: payload.job_id,
-        event_type: 'job_failed',
-        severity: 'error',
-        message: errorMessage,
-        payload: { job_type: QUEUE_NAMES.ANALYZE },
-      })
-    )
 
     throw error
   }
