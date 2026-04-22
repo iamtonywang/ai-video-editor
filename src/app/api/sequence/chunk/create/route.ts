@@ -98,6 +98,69 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const sceneSequence = await supabaseAdmin
+      .from('sequence_scenes')
+      .select('sequence_id')
+      .eq('id', scene_id)
+      .maybeSingle()
+
+    if (sceneSequence.error) {
+      return NextResponse.json(
+        { ok: false, error: sceneSequence.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (!sceneSequence.data?.sequence_id) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_SCENE_ID' },
+        { status: 400 }
+      )
+    }
+
+    const sequenceProject = await supabaseAdmin
+      .from('sequences')
+      .select('project_id')
+      .eq('id', sceneSequence.data.sequence_id)
+      .maybeSingle()
+
+    if (sequenceProject.error) {
+      return NextResponse.json(
+        { ok: false, error: sequenceProject.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (!sequenceProject.data?.project_id) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_SCENE_ID' },
+        { status: 400 }
+      )
+    }
+
+    const latestIdentityGate = await supabaseAdmin
+      .from('gate_evaluations')
+      .select('decision')
+      .eq('project_id', sequenceProject.data.project_id)
+      .eq('gate_type', 'identity')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (latestIdentityGate.error) {
+      return NextResponse.json(
+        { ok: false, error: latestIdentityGate.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (latestIdentityGate.data?.decision === 'blocked') {
+      return NextResponse.json(
+        { ok: false, error: 'IDENTITY_GATE_BLOCKED' },
+        { status: 403 }
+      )
+    }
+
     const { data, error } = await supabaseAdmin
       .from('sequence_chunks')
       .insert({

@@ -61,6 +61,49 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const sequenceProject = await supabaseAdmin
+      .from('sequences')
+      .select('project_id')
+      .eq('id', sequence_id)
+      .maybeSingle()
+
+    if (sequenceProject.error) {
+      return NextResponse.json(
+        { ok: false, error: sequenceProject.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (!sequenceProject.data?.project_id) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_SEQUENCE_ID' },
+        { status: 400 }
+      )
+    }
+
+    const latestIdentityGate = await supabaseAdmin
+      .from('gate_evaluations')
+      .select('decision')
+      .eq('project_id', sequenceProject.data.project_id)
+      .eq('gate_type', 'identity')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (latestIdentityGate.error) {
+      return NextResponse.json(
+        { ok: false, error: latestIdentityGate.error.message },
+        { status: 500 }
+      )
+    }
+
+    if (latestIdentityGate.data?.decision === 'blocked') {
+      return NextResponse.json(
+        { ok: false, error: 'IDENTITY_GATE_BLOCKED' },
+        { status: 403 }
+      )
+    }
+
     const { data, error } = await supabaseAdmin
       .from('sequence_scenes')
       .insert({
