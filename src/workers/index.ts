@@ -133,6 +133,7 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
     })
   } catch (error) {
     const errorMessage = getErrorMessage(error)
+    const errorCode = 'ANALYZE_WORKER_ERROR'
 
     try {
       await updateAnalyzeJobStatus({
@@ -141,7 +142,7 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
         progress: 10,
         started_at: now,
         finished_at: now,
-        error_code: 'ANALYZE_WORKER_ERROR',
+        error_code: errorCode,
         error_message: errorMessage,
       })
     } catch (statusUpdateError) {
@@ -153,6 +154,13 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       level: 'error',
       step: 'analyze_failed',
       message: errorMessage,
+      payload: {
+        job_id: payload.job_id,
+        project_id: payload.project_id,
+        job_type: 'analyze',
+        error_code: errorCode,
+        error_message: errorMessage,
+      },
     })
 
     // TODO: Insert recovery_events only for real recovery actions with an allowed event_type mapping.
@@ -237,6 +245,7 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
     })
   } catch (error) {
     const errorMessage = getErrorMessage(error)
+    const errorCode = 'BUILD_IDENTITY_WORKER_ERROR'
 
     try {
       await updateAnalyzeJobStatus({
@@ -245,7 +254,7 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
         progress: 10,
         started_at: now,
         finished_at: now,
-        error_code: 'BUILD_IDENTITY_WORKER_ERROR',
+        error_code: errorCode,
         error_message: errorMessage,
       })
     } catch (statusUpdateError) {
@@ -257,6 +266,13 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       level: 'error',
       step: 'build_identity_failed',
       message: errorMessage,
+      payload: {
+        job_id: payload.job_id,
+        project_id: payload.project_id,
+        job_type: 'build_identity',
+        error_code: errorCode,
+        error_message: errorMessage,
+      },
     })
 
     throw error
