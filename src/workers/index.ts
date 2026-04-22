@@ -204,6 +204,20 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       throw new Error(`identity_profiles_insert_failed: ${createIdentity.error.message}`)
     }
 
+    const updateProjectActiveIdentity = await supabaseServer
+      .from('projects')
+      .update({
+        active_identity_profile_id: createIdentity.data.id,
+      })
+      .eq('id', payload.project_id)
+      .select('id')
+      .single()
+    if (updateProjectActiveIdentity.error) {
+      throw new Error(
+        `projects_active_identity_update_failed: ${updateProjectActiveIdentity.error.message}`
+      )
+    }
+
     await updateAnalyzeJobStatus({
       job_id: payload.job_id,
       status: 'success',
