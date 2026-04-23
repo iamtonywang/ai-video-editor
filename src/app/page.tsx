@@ -23,29 +23,45 @@ const PROJECT_HOME_LIST_CSS = `
   padding: 0.5rem 0.75rem;
   border: 1px solid;
   border-radius: 12px;
-  background: none;
   font-size: 0.8125rem;
   line-height: 1.35;
   text-align: center;
-  transition: filter 0.15s ease, opacity 0.15s ease;
+  transform: scale(1);
+  transform-origin: center;
+  transition: transform 0.08s ease, filter 0.12s ease, background-color 0.12s ease;
 }
 .proj-home-action--passed {
   color: #16a34a;
   border-color: #16a34a;
   font-weight: 500;
+  background-color: rgba(22, 163, 74, 0.05);
 }
 .proj-home-action--blocked {
   color: #dc2626;
   border-color: #dc2626;
   font-weight: 600;
+  background-color: rgba(220, 38, 38, 0.05);
 }
 .proj-home-action--no_gate {
   color: #6b7280;
   border-color: #6b7280;
   font-weight: 500;
+  background-color: rgba(107, 114, 128, 0.04);
 }
-.proj-home-list > a:hover .proj-home-action {
-  filter: brightness(0.94);
+.proj-home-list > a:hover .proj-home-action--passed {
+  background-color: rgba(22, 163, 74, 0.08);
+  filter: brightness(0.97);
+}
+.proj-home-list > a:hover .proj-home-action--blocked {
+  background-color: rgba(220, 38, 38, 0.08);
+  filter: brightness(0.97);
+}
+.proj-home-list > a:hover .proj-home-action--no_gate {
+  background-color: rgba(107, 114, 128, 0.07);
+  filter: brightness(0.97);
+}
+.proj-home-list > a:active .proj-home-action {
+  transform: scale(0.98);
 }
 `
 
