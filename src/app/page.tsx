@@ -81,11 +81,22 @@ export default async function Home() {
     transition: 'border-color 0.15s ease',
   }
 
+  const titleRowStyle: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) auto',
+    gap: '0.375rem 0.5rem',
+    alignItems: 'start',
+    width: '100%',
+  }
+
   const titleStyle: CSSProperties = {
     margin: 0,
     fontSize: '0.9375rem',
     fontWeight: 600,
     lineHeight: 1.35,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   }
 
   const metaStyle: CSSProperties = {
@@ -93,14 +104,6 @@ export default async function Home() {
     fontSize: '0.75rem',
     lineHeight: 1.4,
     color: '#6b7280',
-  }
-
-  const gateStyleBase: CSSProperties = {
-    margin: '0.35rem 0 0',
-    fontSize: '0.6875rem',
-    lineHeight: 1.35,
-    fontWeight: 500,
-    letterSpacing: '0.02em',
   }
 
   const emptyStyle: CSSProperties = {
@@ -135,6 +138,25 @@ export default async function Home() {
               const identityGate: IdentityGateSummary =
                 latestIdentityGateByProject.get(row.id) ?? 'no_gate'
 
+              const gateColor = identityGateColor(identityGate)
+              const badgeFontWeight = identityGate === 'blocked' ? 600 : 500
+
+              const badgeStyle: CSSProperties = {
+                flexShrink: 0,
+                margin: 0,
+                alignSelf: 'start',
+                fontSize: '0.6875rem',
+                lineHeight: 1.3,
+                fontWeight: badgeFontWeight,
+                letterSpacing: '0.02em',
+                color: gateColor,
+                border: `1px solid ${gateColor}`,
+                borderRadius: 9999,
+                padding: '0.15rem 0.45rem',
+                background: 'none',
+                whiteSpace: 'nowrap',
+              }
+
               return (
                 <Link
                   key={row.id}
@@ -142,16 +164,11 @@ export default async function Home() {
                   style={cardStyle}
                   prefetch={false}
                 >
-                  <p style={titleStyle}>{displayTitle}</p>
+                  <div style={titleRowStyle}>
+                    <p style={titleStyle}>{displayTitle}</p>
+                    <span style={badgeStyle}>{identityGate}</span>
+                  </div>
                   <p style={metaStyle}>{status}</p>
-                  <p
-                    style={{
-                      ...gateStyleBase,
-                      color: identityGateColor(identityGate),
-                    }}
-                  >
-                    {identityGate}
-                  </p>
                   <p style={metaStyle}>{formatCreatedAt(row.created_at)}</p>
                 </Link>
               )
