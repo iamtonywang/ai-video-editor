@@ -12,6 +12,43 @@ type ProjectRow = {
 
 type IdentityGateSummary = 'passed' | 'blocked' | 'no_gate'
 
+/** Scoped to the home project list; enables :hover without extra files. */
+const PROJECT_HOME_LIST_CSS = `
+.proj-home-action {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid;
+  border-radius: 12px;
+  background: none;
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  text-align: center;
+  transition: filter 0.15s ease, opacity 0.15s ease;
+}
+.proj-home-action--passed {
+  color: #16a34a;
+  border-color: #16a34a;
+  font-weight: 500;
+}
+.proj-home-action--blocked {
+  color: #dc2626;
+  border-color: #dc2626;
+  font-weight: 600;
+}
+.proj-home-action--no_gate {
+  color: #6b7280;
+  border-color: #6b7280;
+  font-weight: 500;
+}
+.proj-home-list > a:hover .proj-home-action {
+  filter: brightness(0.94);
+}
+`
+
 function identityGateColor(summary: IdentityGateSummary): string {
   if (summary === 'passed') return '#16a34a'
   if (summary === 'blocked') return '#dc2626'
@@ -90,23 +127,6 @@ export default async function Home() {
     transition: 'border-color 0.15s ease',
   }
 
-  const actionChipStyle: CSSProperties = {
-    display: 'block',
-    boxSizing: 'border-box',
-    width: '100%',
-    minWidth: 0,
-    marginTop: '0.5rem',
-    padding: '0.5rem 0.75rem',
-    border: '1px solid #d1d1d1',
-    borderRadius: 12,
-    background: 'none',
-    fontSize: '0.8125rem',
-    fontWeight: 500,
-    lineHeight: 1.35,
-    textAlign: 'center',
-    color: 'inherit',
-  }
-
   const titleRowStyle: CSSProperties = {
     display: 'grid',
     gridTemplateColumns: 'minmax(0, 1fr) auto',
@@ -140,6 +160,7 @@ export default async function Home() {
 
   return (
     <main className={`${styles.page} font-latin`} lang="en">
+      <style dangerouslySetInnerHTML={{ __html: PROJECT_HOME_LIST_CSS }} />
       <div className={styles.content}>
         <header className={styles.header}>
           <h1 className={styles.title}>SHAWWANG</h1>
@@ -149,7 +170,7 @@ export default async function Home() {
         {projects.length === 0 ? (
           <p style={emptyStyle}>No projects yet</p>
         ) : (
-          <div style={listStyle}>
+          <div className="proj-home-list" style={listStyle}>
             {projects.map((row) => {
               const displayTitle =
                 typeof row.title === 'string' && row.title.trim()
@@ -196,7 +217,9 @@ export default async function Home() {
                   </div>
                   <p style={metaStyle}>{status}</p>
                   <p style={metaStyle}>{formatCreatedAt(row.created_at)}</p>
-                  <span style={actionChipStyle}>
+                  <span
+                    className={`proj-home-action proj-home-action--${identityGate}`}
+                  >
                     {detailActionLabel(identityGate)}
                   </span>
                 </Link>
