@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 import Link from 'next/link'
-import { createClient } from '@supabase/supabase-js'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import styles from './page.module.css'
 
 type ProjectRow = {
@@ -8,6 +8,14 @@ type ProjectRow = {
   title: string | null
   workflow_status: string | null
   created_at: string | null
+}
+
+type IdentityGateSummary = 'passed' | 'blocked' | 'no_gate'
+
+function identityGateColor(summary: IdentityGateSummary): string {
+  if (summary === 'passed') return '#16a34a'
+  if (summary === 'blocked') return '#dc2626'
+  return '#6b7280'
 }
 
 function formatCreatedAt(iso: string | null): string {
@@ -24,24 +32,33 @@ function formatCreatedAt(iso: string | null): string {
 }
 
 export default async function Home() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    throw new Error(
-      'NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are required'
-    )
-  }
-
-  const supabase = createClient(supabaseUrl, supabaseAnonKey)
-
-  const { data } = await supabase
+  const { data } = await supabaseAdmin
     .from('projects')
     .select('id, title, workflow_status, created_at')
     .order('created_at', { ascending: false })
     .limit(5)
 
   const projects: ProjectRow[] = (data ?? []) as ProjectRow[]
+
+  const projectIds = projects.map((p) => p.id)
+  const latestIdentityGateByProject = new Map<string, 'passed' | 'blocked'>()
+
+  if (projectIds.length > 0) {
+    const { data: gateRows } = await supabaseAdmin
+      .from('gate_evaluations')
+      .select('project_id, decision, created_at')
+      .eq('gate_type', 'identity')
+      .in('project_id', projectIds)
+      .order('created_at', { ascending: false })
+
+    for (const g of gateRows ?? []) {
+      const pid = typeof g.project_id === 'string' ? g.project_id : ''
+      if (!pid || latestIdentityGateByProject.has(pid)) continue
+      if (g.decision === 'passed' || g.decision === 'blocked') {
+        latestIdentityGateByProject.set(pid, g.decision)
+      }
+    }
+  }
 
   const listStyle: CSSProperties = {
     width: '100%',
@@ -78,6 +95,14 @@ export default async function Home() {
     color: '#6b7280',
   }
 
+  const gateStyleBase: CSSProperties = {
+    margin: '0.35rem 0 0',
+    fontSize: '0.6875rem',
+    lineHeight: 1.35,
+    fontWeight: 500,
+    letterSpacing: '0.02em',
+  }
+
   const emptyStyle: CSSProperties = {
     margin: 0,
     fontSize: '0.875rem',
@@ -107,6 +132,9 @@ export default async function Home() {
                   ? row.workflow_status.trim()
                   : '—'
 
+              const identityGate: IdentityGateSummary =
+                latestIdentityGateByProject.get(row.id) ?? 'no_gate'
+
               return (
                 <Link
                   key={row.id}
@@ -116,6 +144,14 @@ export default async function Home() {
                 >
                   <p style={titleStyle}>{displayTitle}</p>
                   <p style={metaStyle}>{status}</p>
+                  <p
+                    style={{
+                      ...gateStyleBase,
+                      color: identityGateColor(identityGate),
+                    }}
+                  >
+                    {identityGate}
+                  </p>
                   <p style={metaStyle}>{formatCreatedAt(row.created_at)}</p>
                 </Link>
               )
