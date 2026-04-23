@@ -18,6 +18,12 @@ function identityGateColor(summary: IdentityGateSummary): string {
   return '#6b7280'
 }
 
+function detailActionLabel(summary: IdentityGateSummary): string {
+  if (summary === 'passed') return 'Continue'
+  if (summary === 'blocked') return 'Review Issue'
+  return 'View Project'
+}
+
 function formatCreatedAt(iso: string | null): string {
   if (!iso) return '—'
   const d = new Date(iso)
@@ -70,15 +76,35 @@ export default async function Home() {
   }
 
   const cardStyle: CSSProperties = {
-    display: 'block',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'stretch',
     boxSizing: 'border-box',
     width: '100%',
+    minWidth: 0,
     padding: '0.875rem 1rem',
     border: '1px solid #d1d1d1',
     borderRadius: 14,
     textDecoration: 'none',
     color: '#111827',
     transition: 'border-color 0.15s ease',
+  }
+
+  const actionChipStyle: CSSProperties = {
+    display: 'block',
+    boxSizing: 'border-box',
+    width: '100%',
+    minWidth: 0,
+    marginTop: '0.5rem',
+    padding: '0.5rem 0.75rem',
+    border: '1px solid #d1d1d1',
+    borderRadius: 12,
+    background: 'none',
+    fontSize: '0.8125rem',
+    fontWeight: 500,
+    lineHeight: 1.35,
+    textAlign: 'center',
+    color: 'inherit',
   }
 
   const titleRowStyle: CSSProperties = {
@@ -170,6 +196,9 @@ export default async function Home() {
                   </div>
                   <p style={metaStyle}>{status}</p>
                   <p style={metaStyle}>{formatCreatedAt(row.created_at)}</p>
+                  <span style={actionChipStyle}>
+                    {detailActionLabel(identityGate)}
+                  </span>
                 </Link>
               )
             })}
