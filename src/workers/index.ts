@@ -70,20 +70,31 @@ async function updateAnalyzeJobStatus(params: {
   finished_at?: string
   error_code?: string | null
   error_message?: string | null
+  output_asset_key?: string | null
 }) {
   const now = new Date().toISOString()
-  const result = await supabaseServer
-    .from('jobs')
-    .update({
-      status: params.status,
-      progress: params.progress,
-      started_at: params.started_at,
-      finished_at: params.finished_at,
-      updated_at: now,
-      error_code: params.error_code ?? null,
-      error_message: params.error_message ?? null,
-    })
-    .eq('id', params.job_id)
+  const row: {
+    status: AnalyzeJobStatus
+    progress: number
+    started_at?: string
+    finished_at?: string
+    updated_at: string
+    error_code: string | null
+    error_message: string | null
+    output_asset_key?: string | null
+  } = {
+    status: params.status,
+    progress: params.progress,
+    started_at: params.started_at,
+    finished_at: params.finished_at,
+    updated_at: now,
+    error_code: params.error_code ?? null,
+    error_message: params.error_message ?? null,
+  }
+  if (params.output_asset_key !== undefined) {
+    row.output_asset_key = params.output_asset_key
+  }
+  const result = await supabaseServer.from('jobs').update(row).eq('id', params.job_id)
   assertDbResult(`jobs_${params.status}_update_failed`, result)
 }
 
@@ -382,22 +393,21 @@ async function handlePreviewJob(payload: PreviewPayload) {
 
   await updateAnalyzeJobStatus({
     job_id: payload.job_id,
-    status: 'failed',
+    status: 'success',
     progress: 100,
     started_at: now,
     finished_at: now,
-    error_code: 'PREVIEW_NOT_IMPLEMENTED',
-    error_message: 'Preview pipeline is not implemented yet',
+    error_code: null,
+    error_message: null,
+    output_asset_key: 'placeholder-preview',
   })
 
   await addJobEvent({
     job_id: payload.job_id,
-    level: 'warn',
-    step: 'preview_not_implemented',
-    message: 'Preview pipeline is not implemented yet',
+    level: 'info',
+    step: 'preview_placeholder_completed',
+    message: 'Preview placeholder completed',
     payload: {
-      project_id: payload.project_id,
-      job_type: 'preview',
       instruction_present: instructionLength > 0,
       instruction_length: instructionLength,
     },

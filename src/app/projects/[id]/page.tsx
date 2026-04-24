@@ -612,7 +612,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             {promptAccordionOpen ? (
               <>
                 <p className={styles.promptNotImplementedHint}>
-                  Preview pipeline is not implemented yet.
+                  Preview placeholder completed. Real rendering is not connected yet.
                 </p>
                 <textarea
                   className={styles.promptTextarea}
