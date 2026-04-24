@@ -89,6 +89,23 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     setHasRunningBuildIdentity(!!body.data.has_running_build_identity)
   }, [])
 
+  const refreshGateStatus = useCallback(async (id: string) => {
+    const response = await fetch(`/api/projects/${id}/gate-status`, {
+      method: 'GET',
+      cache: 'no-store',
+    })
+    const gateBody = (await response.json()) as GateStatusResponse
+    if (!response.ok || !gateBody.ok || !gateBody.data) {
+      setErrorMessage(mapApiErrorToUserMessage(gateBody.error))
+      return
+    }
+    setErrorMessage(null)
+    setStatus(gateBody.data.status)
+    setMeasuredValue(gateBody.data.measured_value)
+    setThreshold(gateBody.data.threshold)
+    setReasonCode(gateBody.data.reason_code)
+  }, [])
+
   useEffect(() => {
     let cancelled = false
 
@@ -174,11 +191,13 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     return styles.statusNoGate
   }, [status])
 
-  const actionLabel = useMemo(() => {
-    if (status === 'blocked') return 'Retry Identity Build'
+  const actionButtonText = useMemo(() => {
     if (status === 'passed') return 'Continue'
+    if (isSubmitting) return 'Building...'
+    if (hasRunningBuildIdentity) return 'Building...'
+    if (status === 'blocked') return 'Retry Identity Build'
     return 'Run Identity Check'
-  }, [status])
+  }, [status, isSubmitting, hasRunningBuildIdentity])
 
   const actionDisabled = useMemo(() => {
     if (status === 'passed') return true
@@ -189,12 +208,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const availabilityHint = useMemo(() => {
     if (status === 'passed') return null
     if (canRunIdentity) return null
-    const code =
-      blockedReason ??
-      (hasRunningBuildIdentity ? 'BUILD_IDENTITY_ALREADY_RUNNING' : null)
+    if (hasRunningBuildIdentity && !isSubmitting) return 'Building...'
+    const code = blockedReason ?? null
     if (!code) return null
     return mapApiErrorToUserMessage(code)
-  }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity])
+  }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity, isSubmitting])
 
   async function handleActionClick() {
     if (status === 'passed') return
@@ -217,10 +235,16 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
       if (response.ok && body.ok) {
         setActionMessage('Building started')
-        await refreshExecutionContext(projectId)
+        await Promise.all([
+          refreshExecutionContext(projectId),
+          refreshGateStatus(projectId),
+        ])
       } else if (response.status === 409) {
         setActionMessage('Already running')
-        await refreshExecutionContext(projectId)
+        await Promise.all([
+          refreshExecutionContext(projectId),
+          refreshGateStatus(projectId),
+        ])
       } else if (response.status === 400) {
         setActionMessage(mapApiErrorToUserMessage(body.error))
       } else {
@@ -281,7 +305,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             disabled={actionDisabled}
             onClick={handleActionClick}
           >
-            {actionLabel}
+            {actionButtonText}
           </button>
           {availabilityHint ? (
             <p className={styles.meta} style={{ marginTop: 8, width: '100%' }}>
