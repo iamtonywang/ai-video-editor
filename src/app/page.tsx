@@ -1,20 +1,27 @@
 'use client'
 
-import { FormEvent, useState } from 'react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
+import { Suspense, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { createAuthBrowserClient } from '@/lib/supabase/auth-browser'
 import styles from './page.module.css'
+import authStyles from './login/page.module.css'
 
-export default function Home() {
+const ERROR_TEXT: Record<string, string> = {
+  auth_callback_failed: 'Sign-in could not be completed. Try again.',
+}
+
+const SIGNUP_NO_SESSION =
+  '가입은 완료됐지만 이메일 확인 설정 때문에 세션이 없습니다. Supabase Auth 설정을 확인하세요.'
+
+function HomeAuthForm() {
   const router = useRouter()
-  const [projectId, setProjectId] = useState('')
-
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const id = projectId.trim()
-    if (!id) return
-    router.push(`/projects/${id}`)
-  }
+  const searchParams = useSearchParams()
+  const urlError = searchParams.get('error')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   return (
     <main className={`${styles.page} font-latin`} lang="en">
@@ -23,32 +30,156 @@ export default function Home() {
           <h1 className={styles.title}>SHAWWANG</h1>
           <p className={styles.subtitle}>AI Video Engine</p>
         </header>
-        <p className={styles.hint}>Enter your project ID to continue</p>
         <p className={styles.hint}>
-          <Link
-            href="/login"
-            style={{ color: '#2563eb', textDecoration: 'none' }}
-          >
-            Log in
-          </Link>
-          <span> with email and password to create projects (owner is saved on create API).</span>
+          Sign in with email and password, or create an account.
         </p>
 
-        <form className={styles.form} onSubmit={handleSubmit}>
-          <input
-            type="text"
-            value={projectId}
-            onChange={(event) => setProjectId(event.target.value)}
-            placeholder="Paste your project ID here"
-            className={styles.input}
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <button type="submit" className={styles.button}>
-            Enter Workspace
-          </button>
-        </form>
+        {urlError && (
+          <p className={authStyles.error} role="alert">
+            {ERROR_TEXT[urlError] ?? 'Something went wrong.'}
+          </p>
+        )}
+
+        {error && (
+          <p className={authStyles.error} role="alert">
+            {error}
+          </p>
+        )}
+        {message && <p className={authStyles.success}>{message}</p>}
+
+        <div className={authStyles.formBlock}>
+          <div className={authStyles.fieldGroup}>
+            <input
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="you@example.com"
+              className={styles.input}
+              autoComplete="email"
+              spellCheck={false}
+              disabled={submitting}
+              aria-label="Email"
+            />
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Password"
+              className={styles.input}
+              autoComplete="current-password"
+              disabled={submitting}
+              aria-label="Password"
+            />
+          </div>
+          <div className={authStyles.buttonRow}>
+            <button
+              type="button"
+              className={styles.button}
+              disabled={submitting}
+              onClick={async () => {
+                setError(null)
+                setMessage(null)
+                const trimmed = email.trim()
+                if (!trimmed) {
+                  setError('Email is required.')
+                  return
+                }
+                if (!password) {
+                  setError('Password is required.')
+                  return
+                }
+                setSubmitting(true)
+                try {
+                  const supabase = createAuthBrowserClient()
+                  const { error: signInError } =
+                    await supabase.auth.signInWithPassword({
+                      email: trimmed,
+                      password,
+                    })
+                  if (signInError) {
+                    setError(signInError.message)
+                    return
+                  }
+                  router.replace('/')
+                } catch (e) {
+                  setError(
+                    e instanceof Error
+                      ? e.message
+                      : 'Could not sign in. Please try again.'
+                  )
+                } finally {
+                  setSubmitting(false)
+                }
+              }}
+            >
+              {submitting ? 'Working…' : 'Log in'}
+            </button>
+            <button
+              type="button"
+              className={authStyles.buttonSecondary}
+              disabled={submitting}
+              onClick={async () => {
+                setError(null)
+                setMessage(null)
+                const trimmed = email.trim()
+                if (!trimmed) {
+                  setError('Email is required.')
+                  return
+                }
+                if (!password) {
+                  setError('Password is required.')
+                  return
+                }
+                setSubmitting(true)
+                try {
+                  const supabase = createAuthBrowserClient()
+                  const { data, error: signUpError } = await supabase.auth.signUp(
+                    {
+                      email: trimmed,
+                      password,
+                    }
+                  )
+                  if (signUpError) {
+                    setError(signUpError.message)
+                    return
+                  }
+                  if (data.session) {
+                    router.replace('/')
+                    return
+                  }
+                  setMessage(SIGNUP_NO_SESSION)
+                } catch (e) {
+                  setError(
+                    e instanceof Error
+                      ? e.message
+                      : 'Could not sign up. Please try again.'
+                  )
+                } finally {
+                  setSubmitting(false)
+                }
+              }}
+            >
+              {submitting ? 'Working…' : 'Sign up'}
+            </button>
+          </div>
+        </div>
       </div>
     </main>
+  )
+}
+
+export default function Home() {
+  return (
+    <Suspense
+      fallback={
+        <main className={`${styles.page} font-latin`} lang="en">
+          <div className={styles.content}>
+            <p className={authStyles.subtle}>Loading…</p>
+          </div>
+        </main>
+      }
+    >
+      <HomeAuthForm />
+    </Suspense>
   )
 }
