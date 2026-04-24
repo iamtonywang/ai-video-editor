@@ -184,7 +184,7 @@ export async function POST(req: NextRequest) {
           identity_status,
           build_score,
         },
-      })
+      }, { jobId: String(data.id) })
     } catch (enqueueError) {
       const enqueueMessage =
         enqueueError instanceof Error ? enqueueError.message : 'UNKNOWN_ERROR'

@@ -167,7 +167,7 @@ export async function POST(req: NextRequest) {
       await jobQueue.add('job', {
         job_type,
         payload: queuePayload,
-      })
+      }, { jobId: String(data.id) })
     } catch (error) {
       console.error('POST /api/job/create enqueue error:', error)
 
