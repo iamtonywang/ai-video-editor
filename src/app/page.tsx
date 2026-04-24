@@ -120,6 +120,9 @@ function HomeAuthForm() {
                 {error}
               </p>
             )}
+            <Link href="/projects" className={styles.button}>
+              Go to projects
+            </Link>
             <button
               type="button"
               className={`${styles.button} ${styles.logoutButton}`}
