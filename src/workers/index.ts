@@ -23,6 +23,11 @@ type BuildIdentityPayload = {
   force_fail?: boolean
 }
 
+type PreviewPayload = {
+  job_id: string
+  project_id: string
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR'
 }
@@ -347,6 +352,45 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
   }
 }
 
+async function handlePreviewJob(payload: PreviewPayload) {
+  const now = new Date().toISOString()
+
+  await updateAnalyzeJobStatus({
+    job_id: payload.job_id,
+    status: 'running',
+    progress: 5,
+    started_at: now,
+    error_code: null,
+    error_message: null,
+  })
+
+  await addJobEvent({
+    job_id: payload.job_id,
+    level: 'info',
+    step: 'preview_received',
+    message: 'Preview job received',
+    payload: { project_id: payload.project_id, job_type: 'preview' },
+  })
+
+  await updateAnalyzeJobStatus({
+    job_id: payload.job_id,
+    status: 'failed',
+    progress: 100,
+    started_at: now,
+    finished_at: now,
+    error_code: 'PREVIEW_NOT_IMPLEMENTED',
+    error_message: 'Preview pipeline is not implemented yet',
+  })
+
+  await addJobEvent({
+    job_id: payload.job_id,
+    level: 'warn',
+    step: 'preview_not_implemented',
+    message: 'Preview pipeline is not implemented yet',
+    payload: { project_id: payload.project_id, job_type: 'preview' },
+  })
+}
+
 const worker = new Worker(
   'job-queue',
   async (job) => {
@@ -360,6 +404,10 @@ const worker = new Worker(
       case QUEUE_NAMES.BUILD_IDENTITY:
         console.log('BUILD_IDENTITY job received', payload)
         await handleBuildIdentityJob(payload as BuildIdentityPayload)
+        break
+      case QUEUE_NAMES.PREVIEW:
+        console.log('PREVIEW job received', payload)
+        await handlePreviewJob(payload as PreviewPayload)
         break
 
       default:
