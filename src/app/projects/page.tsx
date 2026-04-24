@@ -176,13 +176,12 @@ export default function ProjectsPage() {
         <header className={styles.header}>
           <h1 className={styles.title}>Projects</h1>
           <p className={styles.subtitle}>Your workspace projects</p>
+          <div className={styles.topActions}>
+            <Link href="/" className={styles.actionLink}>
+              Back to home
+            </Link>
+          </div>
         </header>
-
-        <div className={styles.topActions}>
-          <Link href="/" className={styles.actionLink}>
-            Back to home
-          </Link>
-        </div>
 
         {loading && <p className={styles.meta}>Loading…</p>}
 
@@ -255,15 +254,17 @@ export default function ProjectsPage() {
                         <span className={styles.status}>{p.workflow_status}</span>
                       </div>
                     </Link>
-                    <button
-                      type="button"
-                      className={styles.deleteButton}
-                      disabled={isDeleting}
-                      onClick={() => handleDeleteProject(p.id)}
-                      aria-label={`Delete project ${p.title}`}
-                    >
-                      {isDeleting ? 'Deleting…' : 'Delete'}
-                    </button>
+                    <div className={styles.cardActions}>
+                      <button
+                        type="button"
+                        className={styles.deleteButton}
+                        disabled={isDeleting}
+                        onClick={() => handleDeleteProject(p.id)}
+                        aria-label={`Delete project ${p.title}`}
+                      >
+                        {isDeleting ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
                   </div>
                 </li>
               )

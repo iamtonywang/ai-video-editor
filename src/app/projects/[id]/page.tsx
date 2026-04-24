@@ -294,10 +294,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           )}
         </section>
 
-        <section
-          className={styles.actions}
-          style={{ flexDirection: 'column', alignItems: 'stretch', width: '100%' }}
-        >
+        <section className={styles.actions}>
           <button
             type="button"
             className={styles.actionButton}
@@ -308,17 +305,17 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             {actionButtonText}
           </button>
           {availabilityHint ? (
-            <p className={styles.meta} style={{ marginTop: 8, width: '100%' }}>
+            <p className={styles.metaHint}>
               {availabilityHint}
             </p>
           ) : null}
           {contextLoadError && !errorMessage ? (
-            <p className={styles.meta} style={{ marginTop: 8, width: '100%' }}>
+            <p className={styles.metaHint}>
               {contextLoadError}
             </p>
           ) : null}
           {actionMessage ? (
-            <p className={styles.meta} style={{ marginTop: 8, width: '100%' }}>
+            <p className={styles.metaHint}>
               {actionMessage}
             </p>
           ) : null}
