@@ -47,6 +47,8 @@ export default function ProjectsPage() {
   const [newTitle, setNewTitle] = useState('')
   const [createError, setCreateError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -111,6 +113,7 @@ export default function ProjectsPage() {
   async function handleCreateProject(event: FormEvent) {
     event.preventDefault()
     setCreateError(null)
+    setDeleteError(null)
 
     const title = newTitle.trim()
     if (!title) {
@@ -140,6 +143,33 @@ export default function ProjectsPage() {
     }
   }
 
+  async function handleDeleteProject(id: string) {
+    setCreateError(null)
+    setDeleteError(null)
+
+    const confirmed = confirm('Delete this project? This cannot be undone.')
+    if (!confirmed) return
+
+    setDeletingId(id)
+    try {
+      const response = await fetch(`/api/projects/${id}`, {
+        method: 'DELETE',
+        cache: 'no-store',
+      })
+      const body = (await response.json()) as { ok?: boolean; error?: string }
+      if (!response.ok || !body.ok) {
+        setDeleteError(body.error ?? 'UNKNOWN_ERROR')
+        return
+      }
+
+      setItems((prev) => prev.filter((p) => p.id !== id))
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'UNKNOWN_ERROR')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   return (
     <main className={`${styles.page} font-latin`} lang="en">
       <div className={styles.container}>
@@ -165,6 +195,12 @@ export default function ProjectsPage() {
         {error && !needsLogin && (
           <div className={styles.error}>
             <p style={{ margin: 0 }}>{error}</p>
+          </div>
+        )}
+
+        {deleteError && !needsLogin && (
+          <div className={styles.error}>
+            <p style={{ margin: 0 }}>{deleteError}</p>
           </div>
         )}
 
@@ -202,21 +238,33 @@ export default function ProjectsPage() {
             {items.map((p) => {
               const updatedLabel = formatDate(p.updated_at)
               const createdLabel = formatDate(p.created_at)
+              const isDeleting = deletingId === p.id
               return (
                 <li key={p.id}>
-                  <Link href={`/projects/${p.id}`} className={styles.cardLink}>
-                    <div className={styles.projectTitleRow}>
-                      <p className={styles.projectTitle}>{p.title}</p>
-                      <span className={styles.status}>{p.workflow_status}</span>
-                    </div>
-                    <p className={styles.meta}>
-                      {updatedLabel
-                        ? `Updated ${updatedLabel}`
-                        : createdLabel
-                          ? `Created ${createdLabel}`
-                          : null}
-                    </p>
-                  </Link>
+                  <div className={styles.card}>
+                    <Link href={`/projects/${p.id}`} className={styles.cardMainLink}>
+                      <div className={styles.cardCenter}>
+                        <p className={styles.projectTitle}>{p.title}</p>
+                        <p className={styles.meta}>
+                          {updatedLabel
+                            ? `Updated ${updatedLabel}`
+                            : createdLabel
+                              ? `Created ${createdLabel}`
+                              : null}
+                        </p>
+                        <span className={styles.status}>{p.workflow_status}</span>
+                      </div>
+                    </Link>
+                    <button
+                      type="button"
+                      className={styles.deleteButton}
+                      disabled={isDeleting}
+                      onClick={() => handleDeleteProject(p.id)}
+                      aria-label={`Delete project ${p.title}`}
+                    >
+                      {isDeleting ? 'Deleting…' : 'Delete'}
+                    </button>
+                  </div>
                 </li>
               )
             })}

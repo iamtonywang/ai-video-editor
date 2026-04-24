@@ -43,28 +43,43 @@
   gap: 0.75rem;
 }
 
-.cardLink {
-  display: block;
+.card {
   width: 100%;
   border: 1px solid #d1d1d1;
   border-radius: 14px;
-  padding: 0.9rem 1rem;
-  text-decoration: none;
+  padding: 0;
   color: inherit;
   background: transparent;
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
   transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.cardLink:hover {
+.card:hover {
   border-color: #b8b8b8;
   background: rgba(235, 235, 235, 0.45);
 }
 
-.projectTitleRow {
+.cardMainLink {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-decoration: none;
+  color: inherit;
+  padding: 0.9rem 1rem;
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.cardCenter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  text-align: center;
+  width: 100%;
 }
 
 .projectTitle {
@@ -72,6 +87,7 @@
   font-size: 0.95rem;
   font-weight: 600;
   color: #111827;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -86,9 +102,32 @@
 }
 
 .meta {
-  margin: 0.25rem 0 0;
+  margin: 0;
   font-size: 0.8125rem;
   color: #6b7280;
+}
+
+.deleteButton {
+  flex: 0 0 auto;
+  border: none;
+  background: transparent;
+  color: #991b1b;
+  padding: 0 1rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+  border-left: 1px solid rgba(209, 209, 209, 0.85);
+  border-top-right-radius: 14px;
+  border-bottom-right-radius: 14px;
+  transition: background-color 0.15s ease;
+}
+
+.deleteButton:hover {
+  background: rgba(254, 202, 202, 0.25);
+}
+
+.deleteButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .empty {
