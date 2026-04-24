@@ -34,25 +34,23 @@ type PageProps = {
   params: Promise<{ id: string }>
 }
 
-function hintForBlockedReason(reason: string | null): string | null {
-  if (!reason) return null
-  if (reason === 'REFERENCE_ASSET_REQUIRED') {
-    return 'Add a validated reference asset before running identity build.'
-  }
-  if (reason === 'BUILD_IDENTITY_ALREADY_RUNNING') {
-    return 'A build identity job is already queued or running.'
-  }
-  return reason
-}
+const FALLBACK_ERROR_MESSAGE = 'Something went wrong.'
 
-function messageForBuildError(errorCode: string | undefined): string {
-  if (errorCode === 'REFERENCE_ASSET_REQUIRED') {
-    return hintForBlockedReason('REFERENCE_ASSET_REQUIRED') ?? errorCode
+function mapApiErrorToUserMessage(code: string | undefined): string {
+  switch (code) {
+    case 'INVALID_PROJECT_ID':
+      return 'Invalid Project ID'
+    case 'PROJECT_ID_REQUIRED':
+      return 'Project ID is required'
+    case 'REFERENCE_ASSET_REQUIRED':
+      return 'Reference asset required'
+    case 'BUILD_IDENTITY_ALREADY_RUNNING':
+      return 'Already running'
+    case 'CHUNK_IDENTITY_GATE_BLOCKED':
+      return 'Chunk identity gate blocked'
+    default:
+      return FALLBACK_ERROR_MESSAGE
   }
-  if (errorCode === 'BUILD_IDENTITY_ALREADY_RUNNING') {
-    return 'Already running'
-  }
-  return errorCode ?? 'Request failed'
 }
 
 export default function ProjectGateStatusPage({ params }: PageProps) {
@@ -70,6 +68,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
   const [actionMessage, setActionMessage] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [contextLoadError, setContextLoadError] = useState<string | null>(null)
 
   const refreshExecutionContext = useCallback(async (id: string) => {
     const response = await fetch(`/api/projects/${id}/execution-context`, {
@@ -81,8 +80,10 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       setCanRunIdentity(false)
       setBlockedReason(null)
       setHasRunningBuildIdentity(false)
+      setContextLoadError(mapApiErrorToUserMessage(body.error))
       return
     }
+    setContextLoadError(null)
     setCanRunIdentity(!!body.data.can_run_identity)
     setBlockedReason(body.data.blocked_reason ?? null)
     setHasRunningBuildIdentity(!!body.data.has_running_build_identity)
@@ -98,7 +99,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
         if (!id) {
           if (!cancelled) {
-            setErrorMessage('Project ID is invalid.')
+            setErrorMessage(mapApiErrorToUserMessage('PROJECT_ID_REQUIRED'))
             setLoading(false)
           }
           return
@@ -106,6 +107,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
         if (!cancelled) {
           setProjectId(id)
+          setContextLoadError(null)
         }
 
         const [gateResponse, execResponse] = await Promise.all([
@@ -127,16 +129,18 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             setCanRunIdentity(false)
             setBlockedReason(null)
             setHasRunningBuildIdentity(false)
+            setContextLoadError(mapApiErrorToUserMessage(execBody.error))
           } else {
             setCanRunIdentity(!!execBody.data.can_run_identity)
             setBlockedReason(execBody.data.blocked_reason ?? null)
             setHasRunningBuildIdentity(!!execBody.data.has_running_build_identity)
+            setContextLoadError(null)
           }
         }
 
         if (!gateResponse.ok || !gateBody.ok || !gateBody.data) {
           if (!cancelled) {
-            setErrorMessage('Failed to load gate status.')
+            setErrorMessage(mapApiErrorToUserMessage(gateBody.error))
             setLoading(false)
           }
           return
@@ -151,7 +155,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
         }
       } catch {
         if (!cancelled) {
-          setErrorMessage('Failed to load gate status.')
+          setErrorMessage(FALLBACK_ERROR_MESSAGE)
           setLoading(false)
         }
       }
@@ -188,7 +192,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     const effectiveReason =
       blockedReason ??
       (hasRunningBuildIdentity ? 'BUILD_IDENTITY_ALREADY_RUNNING' : null)
-    return hintForBlockedReason(effectiveReason)
+    if (!effectiveReason) return null
+    return mapApiErrorToUserMessage(effectiveReason)
   }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity])
 
   async function handleActionClick() {
@@ -217,12 +222,12 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
         setActionMessage('Already running')
         await refreshExecutionContext(projectId)
       } else if (response.status === 400) {
-        setActionMessage(messageForBuildError(body.error))
+        setActionMessage(mapApiErrorToUserMessage(body.error))
       } else {
-        setActionMessage(body.error ?? 'Request failed')
+        setActionMessage(mapApiErrorToUserMessage(body.error))
       }
     } catch {
-      setActionMessage('Request failed')
+      setActionMessage(FALLBACK_ERROR_MESSAGE)
     } finally {
       setIsSubmitting(false)
     }
@@ -281,6 +286,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           {availabilityHint ? (
             <p className={styles.meta} style={{ marginTop: 8, width: '100%' }}>
               {availabilityHint}
+            </p>
+          ) : null}
+          {contextLoadError && !errorMessage ? (
+            <p className={styles.meta} style={{ marginTop: 8, width: '100%' }}>
+              {contextLoadError}
             </p>
           ) : null}
           {actionMessage ? (
