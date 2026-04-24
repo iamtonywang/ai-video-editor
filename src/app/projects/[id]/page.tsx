@@ -74,6 +74,28 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [registeringRef, setRegisteringRef] = useState(false)
   const [referenceError, setReferenceError] = useState<string | null>(null)
 
+  const [jobStatusLoading, setJobStatusLoading] = useState(false)
+  const [jobStatusError, setJobStatusError] = useState<string | null>(null)
+  const [jobStatus, setJobStatus] = useState<{
+    job: null | {
+      id: string
+      job_type: string
+      status: string
+      progress: number | null
+      error_code: string | null
+      error_message: string | null
+      created_at: string
+      started_at: string | null
+      finished_at: string | null
+    }
+    latest_event: null | {
+      level: string
+      step: string
+      message: string
+      event_ts: string
+    }
+  }>({ job: null, latest_event: null })
+
   const refreshExecutionContext = useCallback(async (id: string) => {
     const response = await fetch(`/api/projects/${id}/execution-context`, {
       method: 'GET',
@@ -91,6 +113,52 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     setCanRunIdentity(!!body.data.can_run_identity)
     setBlockedReason(body.data.blocked_reason ?? null)
     setHasRunningBuildIdentity(!!body.data.has_running_build_identity)
+  }, [])
+
+  const refreshJobStatus = useCallback(async (id: string) => {
+    setJobStatusLoading(true)
+    setJobStatusError(null)
+    try {
+      const response = await fetch(`/api/projects/${id}/job-status`, {
+        method: 'GET',
+        cache: 'no-store',
+      })
+      const body = (await response.json()) as
+        | {
+            ok: true
+            data: {
+              job: null | {
+                id: string
+                job_type: string
+                status: string
+                progress: number | null
+                error_code: string | null
+                error_message: string | null
+                created_at: string
+                started_at: string | null
+                finished_at: string | null
+              }
+              latest_event: null | {
+                level: string
+                step: string
+                message: string
+                event_ts: string
+              }
+            }
+          }
+        | { ok: false; error: string }
+
+      if (!response.ok || !body.ok) {
+        setJobStatusError(body.ok ? FALLBACK_ERROR_MESSAGE : body.error)
+        return
+      }
+
+      setJobStatus(body.data)
+    } catch {
+      setJobStatusError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setJobStatusLoading(false)
+    }
   }, [])
 
   const refreshGateStatus = useCallback(async (id: string) => {
@@ -174,6 +242,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           setReasonCode(gateBody.data.reason_code)
           setLoading(false)
         }
+
+        void refreshJobStatus(id)
       } catch {
         if (!cancelled) {
           setErrorMessage(FALLBACK_ERROR_MESSAGE)
@@ -218,6 +288,27 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     return mapApiErrorToUserMessage(code)
   }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity, isSubmitting])
 
+  const shouldPollJobStatus = useMemo(() => {
+    const s = jobStatus.job?.status ?? ''
+    return s === 'queued' || s === 'running'
+  }, [jobStatus.job?.status])
+
+  useEffect(() => {
+    if (!projectId) return
+    if (!shouldPollJobStatus) return
+
+    let cancelled = false
+    const pollId = setInterval(() => {
+      if (cancelled) return
+      void refreshJobStatus(projectId)
+    }, 2500)
+
+    return () => {
+      cancelled = true
+      clearInterval(pollId)
+    }
+  }, [projectId, shouldPollJobStatus, refreshJobStatus])
+
   async function handleRegisterReferenceAsset() {
     setReferenceError(null)
     setActionMessage(null)
@@ -253,7 +344,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       }
 
       setReferenceAssetKey('')
-      await Promise.all([refreshExecutionContext(projectId), refreshGateStatus(projectId)])
+      await Promise.all([
+        refreshExecutionContext(projectId),
+        refreshGateStatus(projectId),
+        refreshJobStatus(projectId),
+      ])
     } catch {
       setReferenceError(FALLBACK_ERROR_MESSAGE)
     } finally {
@@ -285,12 +380,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
         await Promise.all([
           refreshExecutionContext(projectId),
           refreshGateStatus(projectId),
+          refreshJobStatus(projectId),
         ])
       } else if (response.status === 409) {
         setActionMessage('Already running')
         await Promise.all([
           refreshExecutionContext(projectId),
           refreshGateStatus(projectId),
+          refreshJobStatus(projectId),
         ])
       } else if (response.status === 400) {
         setActionMessage(mapApiErrorToUserMessage(body.error))
@@ -342,6 +439,54 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
         </section>
 
         <section className={styles.actions}>
+          <section className={styles.jobCard} aria-label="Job status">
+            <p className={styles.jobTitle}>Job Status</p>
+            {jobStatusLoading ? (
+              <p className={styles.metaHint}>Loading…</p>
+            ) : jobStatusError ? (
+              <p className={styles.referenceError} role="alert">
+                {jobStatusError}
+              </p>
+            ) : !jobStatus.job ? (
+              <p className={styles.metaHint}>No job yet</p>
+            ) : (
+              <div className={styles.jobGrid}>
+                <div className={styles.jobRow}>
+                  <span className={styles.jobKey}>job_type</span>
+                  <span className={styles.jobValue}>{jobStatus.job.job_type}</span>
+                </div>
+                <div className={styles.jobRow}>
+                  <span className={styles.jobKey}>status</span>
+                  <span className={styles.jobValue}>{jobStatus.job.status}</span>
+                </div>
+                <div className={styles.jobRow}>
+                  <span className={styles.jobKey}>progress</span>
+                  <span className={styles.jobValue}>
+                    {jobStatus.job.progress == null ? '-' : jobStatus.job.progress}
+                  </span>
+                </div>
+                <div className={styles.jobRow}>
+                  <span className={styles.jobKey}>latest_event</span>
+                  <span className={styles.jobValue}>
+                    {jobStatus.latest_event?.message ?? '-'}
+                  </span>
+                </div>
+                {jobStatus.job.error_code ? (
+                  <div className={styles.jobRow}>
+                    <span className={styles.jobKey}>error_code</span>
+                    <span className={styles.jobValue}>{jobStatus.job.error_code}</span>
+                  </div>
+                ) : null}
+                {jobStatus.job.error_message ? (
+                  <div className={styles.jobRow}>
+                    <span className={styles.jobKey}>error_message</span>
+                    <span className={styles.jobValue}>{jobStatus.job.error_message}</span>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </section>
+
           <section className={styles.referenceCard} aria-label="Register reference asset">
             <p className={styles.referenceTitle}>Reference asset</p>
             <input

@@ -1,0 +1,114 @@
+import { NextResponse } from 'next/server'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+
+type RouteContext = {
+  params: Promise<{ id?: string }>
+}
+
+function isValidProjectUuid(projectId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    projectId
+  )
+}
+
+export async function GET(_req: Request, context: RouteContext) {
+  try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
+    const resolved = await context.params
+    const project_id = typeof resolved?.id === 'string' ? resolved.id.trim() : ''
+
+    if (!project_id || !isValidProjectUuid(project_id)) {
+      return NextResponse.json({ ok: false, error: 'INVALID_PROJECT_ID' }, { status: 400 })
+    }
+
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', project_id)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
+      return NextResponse.json({ ok: false, error: projectError.message }, { status: 500 })
+    }
+
+    if (!projectRow) {
+      return NextResponse.json({ ok: false, error: 'PROJECT_NOT_FOUND' }, { status: 404 })
+    }
+
+    const { data: jobRow, error: jobError } = await supabaseAdmin
+      .from('jobs')
+      .select(
+        'id, job_type, status, progress, error_code, error_message, created_at, started_at, finished_at'
+      )
+      .eq('project_id', project_id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (jobError) {
+      return NextResponse.json({ ok: false, error: jobError.message }, { status: 500 })
+    }
+
+    if (!jobRow?.id) {
+      return NextResponse.json({
+        ok: true,
+        data: { job: null, latest_event: null },
+      })
+    }
+
+    const { data: eventRow, error: eventError } = await supabaseAdmin
+      .from('job_events')
+      .select('level, step, message, event_ts')
+      .eq('job_id', String(jobRow.id))
+      .order('event_ts', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (eventError) {
+      return NextResponse.json({ ok: false, error: eventError.message }, { status: 500 })
+    }
+
+    return NextResponse.json({
+      ok: true,
+      data: {
+        job: {
+          id: String(jobRow.id),
+          job_type: jobRow.job_type,
+          status: jobRow.status,
+          progress: jobRow.progress,
+          error_code: jobRow.error_code,
+          error_message: jobRow.error_message,
+          created_at: jobRow.created_at,
+          started_at: jobRow.started_at,
+          finished_at: jobRow.finished_at,
+        },
+        latest_event: eventRow
+          ? {
+              level: eventRow.level,
+              step: eventRow.step,
+              message: eventRow.message,
+              event_ts: eventRow.event_ts,
+            }
+          : null,
+      },
+    })
+  } catch (error) {
+    console.error('GET /api/projects/[id]/job-status error:', error)
+    const detail = error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+    return NextResponse.json(
+      { ok: false, error: 'INVALID_REQUEST', error_detail: detail },
+      { status: 400 }
+    )
+  }
+}
+
