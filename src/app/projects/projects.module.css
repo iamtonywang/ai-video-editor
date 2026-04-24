@@ -114,6 +114,73 @@
   flex-wrap: wrap;
 }
 
+.createCard {
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  padding: 0.9rem 1rem;
+  background: transparent;
+}
+
+.createForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.createRow {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.createInput {
+  flex: 1 1 14rem;
+  min-width: 12rem;
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid #d1d1d1;
+  padding: 0 0.9rem;
+  font-size: 0.875rem;
+  color: #111827;
+  background: rgba(255, 255, 255, 0.7);
+  outline: none;
+}
+
+.createInput:focus {
+  border-color: #b8b8b8;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.createButton {
+  flex: 0 0 auto;
+  height: 44px;
+  border-radius: 14px;
+  padding: 0 0.9rem;
+  border: 1px solid #d1d1d1;
+  background: transparent;
+  color: #111827;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.createButton:hover {
+  border-color: #b8b8b8;
+  background: rgba(235, 235, 235, 0.45);
+}
+
+.createButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.createError {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #991b1b;
+}
+
 .actionLink {
   border: 1px solid #d1d1d1;
   border-radius: 14px;
