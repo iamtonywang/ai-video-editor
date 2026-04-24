@@ -26,6 +26,8 @@ type BuildIdentityPayload = {
 type PreviewPayload = {
   job_id: string
   project_id: string
+  /** Present for jobs enqueued after API passes instruction through the queue. */
+  instruction?: string
 }
 
 function getErrorMessage(error: unknown) {
@@ -354,6 +356,7 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
 
 async function handlePreviewJob(payload: PreviewPayload) {
   const now = new Date().toISOString()
+  const instructionLength = (payload.instruction ?? '').length
 
   await updateAnalyzeJobStatus({
     job_id: payload.job_id,
@@ -369,7 +372,12 @@ async function handlePreviewJob(payload: PreviewPayload) {
     level: 'info',
     step: 'preview_received',
     message: 'Preview job received',
-    payload: { project_id: payload.project_id, job_type: 'preview' },
+    payload: {
+      project_id: payload.project_id,
+      job_type: 'preview',
+      instruction_present: instructionLength > 0,
+      instruction_length: instructionLength,
+    },
   })
 
   await updateAnalyzeJobStatus({
@@ -387,7 +395,12 @@ async function handlePreviewJob(payload: PreviewPayload) {
     level: 'warn',
     step: 'preview_not_implemented',
     message: 'Preview pipeline is not implemented yet',
-    payload: { project_id: payload.project_id, job_type: 'preview' },
+    payload: {
+      project_id: payload.project_id,
+      job_type: 'preview',
+      instruction_present: instructionLength > 0,
+      instruction_length: instructionLength,
+    },
   })
 }
 
@@ -405,10 +418,16 @@ const worker = new Worker(
         console.log('BUILD_IDENTITY job received', payload)
         await handleBuildIdentityJob(payload as BuildIdentityPayload)
         break
-      case QUEUE_NAMES.PREVIEW:
-        console.log('PREVIEW job received', payload)
-        await handlePreviewJob(payload as PreviewPayload)
+      case QUEUE_NAMES.PREVIEW: {
+        const p = payload as PreviewPayload
+        console.log('PREVIEW job received', {
+          job_id: p.job_id,
+          project_id: p.project_id,
+          instruction_length: p.instruction?.length ?? 0,
+        })
+        await handlePreviewJob(p)
         break
+      }
 
       default:
         throw new Error('Unsupported job_type in this stage')

@@ -44,6 +44,8 @@ export async function POST(req: NextRequest) {
       typeof body?.identity_status === 'string' ? body.identity_status.trim() : ''
     const build_score =
       typeof body?.build_score === 'number' ? body.build_score : undefined
+    const instruction =
+      typeof body?.instruction === 'string' ? body.instruction.trim() : ''
 
     if (!project_id || !job_type || !status) {
       return NextResponse.json(
@@ -112,6 +114,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (job_type === 'preview') {
+      if (!instruction) {
+        return NextResponse.json(
+          { ok: false, error: 'INSTRUCTION_REQUIRED' },
+          { status: 400 }
+        )
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('jobs')
       .insert({
@@ -159,10 +170,16 @@ export async function POST(req: NextRequest) {
               identity_status,
               build_score,
             }
-          : {
-              job_id: data.id,
-              project_id,
-            }
+          : job_type === 'preview'
+            ? {
+                job_id: data.id,
+                project_id,
+                instruction,
+              }
+            : {
+                job_id: data.id,
+                project_id,
+              }
 
       await jobQueue.add('job', {
         job_type,
