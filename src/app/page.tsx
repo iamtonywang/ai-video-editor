@@ -240,10 +240,9 @@ function HomeAuthForm() {
                 >
                   {submitting ? 'Working…' : 'Log in'}
                 </button>
-                <p className={styles.ctaHint}>Don't have an account?</p>
                 <Link
                   href="/signup"
-                  className={authStyles.buttonSecondary}
+                  className={styles.button}
                   aria-disabled={submitting}
                   tabIndex={submitting ? -1 : 0}
                   onClick={(event) => {
