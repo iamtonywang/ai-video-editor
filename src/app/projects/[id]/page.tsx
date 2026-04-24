@@ -76,6 +76,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
   const [jobStatusLoading, setJobStatusLoading] = useState(false)
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
+  const [stoppingJob, setStoppingJob] = useState(false)
+  const [stopJobError, setStopJobError] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<{
     job: null | {
       id: string
@@ -309,6 +311,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }, [projectId, shouldPollJobStatus, refreshJobStatus])
 
+  const stopButtonVisible = useMemo(() => {
+    const s = jobStatus.job?.status ?? ''
+    return !!jobStatus.job?.id && (s === 'queued' || s === 'running')
+  }, [jobStatus.job?.id, jobStatus.job?.status])
+
   async function handleRegisterReferenceAsset() {
     setReferenceError(null)
     setActionMessage(null)
@@ -401,6 +408,46 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
+  async function handleStopJob() {
+    const jobId = jobStatus.job?.id ?? ''
+    if (!projectId || !jobId) return
+
+    setStopJobError(null)
+
+    if (!confirm('Stop this job?')) return
+
+    setStoppingJob(true)
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/jobs/${jobId}/cancel`,
+        { method: 'POST' }
+      )
+
+      const body = (await response.json()) as
+        | { ok: true; data: { job_id: string; status: 'canceled' } }
+        | { ok: false; error: string; status?: string }
+
+      if (!response.ok || !body.ok) {
+        if (!body.ok && body.error === 'JOB_NOT_CANCELABLE') {
+          setStopJobError(`JOB_NOT_CANCELABLE (status: ${body.status ?? '-'})`)
+          return
+        }
+        setStopJobError(body.ok ? FALLBACK_ERROR_MESSAGE : body.error)
+        return
+      }
+
+      await Promise.all([
+        refreshJobStatus(projectId),
+        refreshExecutionContext(projectId),
+        refreshGateStatus(projectId),
+      ])
+    } catch {
+      setStopJobError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setStoppingJob(false)
+    }
+  }
+
   const buttonStyle = useMemo(
     () =>
       ({
@@ -482,6 +529,23 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     <span className={styles.jobKey}>error_message</span>
                     <span className={styles.jobValue}>{jobStatus.job.error_message}</span>
                   </div>
+                ) : null}
+                {stopButtonVisible ? (
+                  <div className={styles.jobActions}>
+                    <button
+                      type="button"
+                      className={styles.stopButton}
+                      disabled={stoppingJob}
+                      onClick={handleStopJob}
+                    >
+                      {stoppingJob ? 'Stopping...' : 'Stop'}
+                    </button>
+                  </div>
+                ) : null}
+                {stopJobError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {stopJobError}
+                  </p>
                 ) : null}
               </div>
             )}
