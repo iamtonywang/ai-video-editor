@@ -189,11 +189,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const availabilityHint = useMemo(() => {
     if (status === 'passed') return null
     if (canRunIdentity) return null
-    const effectiveReason =
+    const code =
       blockedReason ??
       (hasRunningBuildIdentity ? 'BUILD_IDENTITY_ALREADY_RUNNING' : null)
-    if (!effectiveReason) return null
-    return mapApiErrorToUserMessage(effectiveReason)
+    if (!code) return null
+    return mapApiErrorToUserMessage(code)
   }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity])
 
   async function handleActionClick() {
