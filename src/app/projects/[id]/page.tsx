@@ -70,6 +70,10 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [contextLoadError, setContextLoadError] = useState<string | null>(null)
 
+  const [referenceAssetKey, setReferenceAssetKey] = useState('')
+  const [registeringRef, setRegisteringRef] = useState(false)
+  const [referenceError, setReferenceError] = useState<string | null>(null)
+
   const refreshExecutionContext = useCallback(async (id: string) => {
     const response = await fetch(`/api/projects/${id}/execution-context`, {
       method: 'GET',
@@ -214,6 +218,49 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     return mapApiErrorToUserMessage(code)
   }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity, isSubmitting])
 
+  async function handleRegisterReferenceAsset() {
+    setReferenceError(null)
+    setActionMessage(null)
+
+    const asset_key = referenceAssetKey.trim()
+    if (!asset_key) {
+      setReferenceError('Asset key is required.')
+      return
+    }
+
+    if (!projectId) {
+      setReferenceError('Project ID is required.')
+      return
+    }
+
+    setRegisteringRef(true)
+    try {
+      const response = await fetch('/api/source/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          asset_type: 'reference',
+          asset_key,
+          asset_status: 'validated',
+        }),
+      })
+
+      const body = (await response.json()) as { ok?: boolean; error?: string }
+      if (!response.ok || !body.ok) {
+        setReferenceError(body.error ?? FALLBACK_ERROR_MESSAGE)
+        return
+      }
+
+      setReferenceAssetKey('')
+      await Promise.all([refreshExecutionContext(projectId), refreshGateStatus(projectId)])
+    } catch {
+      setReferenceError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setRegisteringRef(false)
+    }
+  }
+
   async function handleActionClick() {
     if (status === 'passed') return
     if (!canRunIdentity || isSubmitting || !projectId) return
@@ -295,6 +342,33 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
         </section>
 
         <section className={styles.actions}>
+          <section className={styles.referenceCard} aria-label="Register reference asset">
+            <p className={styles.referenceTitle}>Reference asset</p>
+            <input
+              type="text"
+              value={referenceAssetKey}
+              onChange={(e) => setReferenceAssetKey(e.target.value)}
+              className={styles.referenceInput}
+              placeholder="asset_key (e.g. storage/path.ext)"
+              aria-label="Reference asset key"
+              disabled={registeringRef}
+              spellCheck={false}
+            />
+            <button
+              type="button"
+              className={styles.referenceButton}
+              disabled={registeringRef}
+              onClick={handleRegisterReferenceAsset}
+            >
+              {registeringRef ? 'Registering…' : 'Register Reference Asset'}
+            </button>
+            {referenceError ? (
+              <p className={styles.referenceError} role="alert">
+                {referenceError}
+              </p>
+            ) : null}
+          </section>
+
           <button
             type="button"
             className={styles.actionButton}
