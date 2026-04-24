@@ -5,6 +5,12 @@ type RouteContext = {
   params: Promise<{ id: string }>
 }
 
+function isValidProjectUuid(projectId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    projectId
+  )
+}
+
 export async function GET(_req: Request, context: RouteContext) {
   try {
     const { id } = await context.params
@@ -13,6 +19,13 @@ export async function GET(_req: Request, context: RouteContext) {
     if (!project_id) {
       return NextResponse.json(
         { ok: false, error: 'PROJECT_ID_REQUIRED' },
+        { status: 400 }
+      )
+    }
+
+    if (!isValidProjectUuid(project_id)) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_PROJECT_ID' },
         { status: 400 }
       )
     }
