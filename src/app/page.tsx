@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import { createAuthBrowserClient } from '@/lib/supabase/auth-browser'
@@ -11,8 +11,8 @@ const ERROR_TEXT: Record<string, string> = {
   auth_callback_failed: 'Sign-in could not be completed. Try again.',
 }
 
-const SIGNUP_NO_SESSION =
-  '가입은 완료됐지만 이메일 확인 설정 때문에 세션이 없습니다. Supabase Auth 설정을 확인하세요.'
+const SIGNUP_SUCCESS_MESSAGE =
+  '회원가입이 완료됐습니다. 가입한 이메일과 비밀번호로 로그인하세요.'
 
 function HomeAuthForm() {
   const searchParams = useSearchParams()
@@ -24,6 +24,7 @@ function HomeAuthForm() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const suppressNextSignedInRef = useRef(false)
 
   useEffect(() => {
     const supabase = createAuthBrowserClient()
@@ -49,7 +50,18 @@ function HomeAuthForm() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && suppressNextSignedInRef.current) {
+        suppressNextSignedInRef.current = false
+        try {
+          await supabase.auth.signOut()
+        } finally {
+          setUserIfMounted(null)
+          if (!cancelled) setAuthLoading(false)
+        }
+        return
+      }
+
       setUserIfMounted(session?.user ?? null)
       if (!cancelled) setAuthLoading(false)
     })
@@ -195,15 +207,18 @@ function HomeAuthForm() {
                           password,
                         })
                       if (signUpError) {
+                        suppressNextSignedInRef.current = false
                         setError(signUpError.message)
                         return
                       }
-                      if (data.session?.user) {
-                        setUser(data.session.user)
-                        return
+                      suppressNextSignedInRef.current = Boolean(data.session)
+                      if (data.session) {
+                        await supabase.auth.signOut()
                       }
-                      setMessage(SIGNUP_NO_SESSION)
+                      setUser(null)
+                      setMessage(SIGNUP_SUCCESS_MESSAGE)
                     } catch (e) {
+                      suppressNextSignedInRef.current = false
                       setError(
                         e instanceof Error
                           ? e.message
