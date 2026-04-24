@@ -14,6 +14,8 @@ const ERROR_TEXT: Record<string, string> = {
 const SIGNUP_SUCCESS_MESSAGE =
   '회원가입이 완료됐습니다. 가입한 이메일과 비밀번호로 로그인하세요.'
 
+const AUTH_LOADING_FAILSAFE_MS = 2500
+
 function HomeAuthForm() {
   const searchParams = useSearchParams()
   const urlError = searchParams.get('error')
@@ -27,48 +29,71 @@ function HomeAuthForm() {
   const suppressNextSignedInRef = useRef(false)
 
   useEffect(() => {
-    const supabase = createAuthBrowserClient()
     let cancelled = false
+    let subscription: { unsubscribe: () => void } | null = null
+    let settled = false
+    let loadingTimer: ReturnType<typeof setTimeout> | null = null
+
+    const finishAuthLoading = () => {
+      if (cancelled || settled) return
+      settled = true
+      if (loadingTimer) clearTimeout(loadingTimer)
+      setAuthLoading(false)
+    }
+
+    loadingTimer = setTimeout(() => {
+      setUser(null)
+      finishAuthLoading()
+    }, AUTH_LOADING_FAILSAFE_MS)
 
     const setUserIfMounted = (u: User | null) => {
       if (!cancelled) setUser(u)
     }
 
-    void supabase.auth
-      .getUser()
-      .then(({ data: { user: u } }) => {
-        if (!cancelled) {
-          setUser(u ?? null)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setUser(null)
-      })
-      .finally(() => {
-        if (!cancelled) setAuthLoading(false)
-      })
+    let supabase: ReturnType<typeof createAuthBrowserClient> | null = null
+    try {
+      supabase = createAuthBrowserClient()
+    } catch {
+      finishAuthLoading()
+    }
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && suppressNextSignedInRef.current) {
-        suppressNextSignedInRef.current = false
-        try {
-          await supabase.auth.signOut()
-        } finally {
+    if (supabase) {
+      void supabase.auth
+        .getUser()
+        .then(({ data: { user: u } }) => {
+          if (!cancelled) {
+            setUser(u ?? null)
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setUser(null)
+        })
+        .finally(() => {
+          finishAuthLoading()
+        })
+
+      const {
+        data: { subscription: nextSub },
+      } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && suppressNextSignedInRef.current) {
+          suppressNextSignedInRef.current = false
           setUserIfMounted(null)
-          if (!cancelled) setAuthLoading(false)
+          finishAuthLoading()
+          void supabase?.auth.signOut().catch(() => {})
+          return
         }
-        return
-      }
 
-      setUserIfMounted(session?.user ?? null)
-      if (!cancelled) setAuthLoading(false)
-    })
+        setUserIfMounted(session?.user ?? null)
+        finishAuthLoading()
+      })
+
+      subscription = nextSub
+    }
 
     return () => {
       cancelled = true
-      subscription.unsubscribe()
+      if (loadingTimer) clearTimeout(loadingTimer)
+      subscription?.unsubscribe()
     }
   }, [])
 
