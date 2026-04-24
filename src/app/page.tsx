@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import type { User } from '@supabase/supabase-js'
 import { createAuthBrowserClient } from '@/lib/supabase/auth-browser'
@@ -11,9 +12,6 @@ const ERROR_TEXT: Record<string, string> = {
   auth_callback_failed: 'Sign-in could not be completed. Try again.',
 }
 
-const SIGNUP_SUCCESS_MESSAGE =
-  '회원가입이 완료됐습니다. 가입한 이메일과 비밀번호로 로그인하세요.'
-
 const AUTH_LOADING_FAILSAFE_MS = 2500
 
 function HomeAuthForm() {
@@ -21,7 +19,6 @@ function HomeAuthForm() {
   const urlError = searchParams.get('error')
   const [user, setUser] = useState<User | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState<string | null>(null)
@@ -136,7 +133,6 @@ function HomeAuthForm() {
                   await supabase.auth.signOut()
                   setUser(null)
                   setAuthLoading(false)
-                  setAuthMode('login')
                 } catch (e) {
                   setError(
                     e instanceof Error
@@ -156,9 +152,7 @@ function HomeAuthForm() {
         {!authLoading && !user && (
           <>
             <p className={styles.hint}>
-              {authMode === 'login'
-                ? 'Sign in with email and password.'
-                : 'Create an account with email and password.'}
+              Sign in with email and password.
             </p>
 
             {urlError && (
@@ -218,74 +212,42 @@ function HomeAuthForm() {
                     setSubmitting(true)
                     try {
                       const supabase = createAuthBrowserClient()
-                      if (authMode === 'login') {
-                        const { data, error: signInError } =
-                          await supabase.auth.signInWithPassword({
-                            email: trimmed,
-                            password,
-                          })
-                        if (signInError) {
-                          setError(signInError.message)
-                          return
-                        }
-                        if (data.user) {
-                          setUser(data.user)
-                        }
-                      } else {
-                        const { data, error: signUpError } =
-                          await supabase.auth.signUp({
-                            email: trimmed,
-                            password,
-                          })
-                        if (signUpError) {
-                          suppressNextSignedInRef.current = false
-                          setError(signUpError.message)
-                          return
-                        }
-                        suppressNextSignedInRef.current = Boolean(data.session)
-                        if (data.session) {
-                          await supabase.auth.signOut()
-                        }
-                        setUser(null)
-                        setMessage(SIGNUP_SUCCESS_MESSAGE)
-                        setAuthMode('login')
+                      const { data, error: signInError } =
+                        await supabase.auth.signInWithPassword({
+                          email: trimmed,
+                          password,
+                        })
+                      if (signInError) {
+                        setError(signInError.message)
+                        return
+                      }
+                      if (data.user) {
+                        setUser(data.user)
                       }
                     } catch (e) {
-                      suppressNextSignedInRef.current = false
                       setError(
                         e instanceof Error
                           ? e.message
-                          : authMode === 'login'
-                            ? 'Could not sign in. Please try again.'
-                            : 'Could not sign up. Please try again.'
+                          : 'Could not sign in. Please try again.'
                       )
                     } finally {
                       setSubmitting(false)
                     }
                   }}
                 >
-                  {submitting
-                    ? 'Working…'
-                    : authMode === 'login'
-                      ? 'Log in'
-                      : 'Create account'}
+                  {submitting ? 'Working…' : 'Log in'}
                 </button>
-                <button
-                  type="button"
+                <Link
+                  href="/signup"
                   className={authStyles.buttonSecondary}
-                  disabled={submitting}
-                  onClick={async () => {
-                    setError(null)
-                    setMessage(null)
-                    if (authMode === 'login') {
-                      setAuthMode('signup')
-                      return
-                    }
-                    setAuthMode('login')
+                  aria-disabled={submitting}
+                  tabIndex={submitting ? -1 : 0}
+                  onClick={(event) => {
+                    if (submitting) event.preventDefault()
                   }}
                 >
-                  {authMode === 'login' ? 'Create account' : 'Back to login'}
-                </button>
+                  Create account
+                </Link>
               </div>
             </div>
           </>
