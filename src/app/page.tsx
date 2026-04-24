@@ -31,7 +31,7 @@ export default function Home() {
           >
             Log in
           </Link>
-          <span> to create projects (owner is saved on create API).</span>
+          <span> with email and password to create projects (owner is saved on create API).</span>
         </p>
 
         <form className={styles.form} onSubmit={handleSubmit}>
