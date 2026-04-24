@@ -21,6 +21,7 @@ function HomeAuthForm() {
   const urlError = searchParams.get('error')
   const [user, setUser] = useState<User | null>(null)
   const [authLoading, setAuthLoading] = useState(true)
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [message, setMessage] = useState<string | null>(null)
@@ -135,6 +136,7 @@ function HomeAuthForm() {
                   await supabase.auth.signOut()
                   setUser(null)
                   setAuthLoading(false)
+                  setAuthMode('login')
                 } catch (e) {
                   setError(
                     e instanceof Error
@@ -154,7 +156,9 @@ function HomeAuthForm() {
         {!authLoading && !user && (
           <>
             <p className={styles.hint}>
-              Sign in with email and password, or create an account.
+              {authMode === 'login'
+                ? 'Sign in with email and password.'
+                : 'Create an account with email and password.'}
             </p>
 
             {urlError && (
@@ -214,30 +218,57 @@ function HomeAuthForm() {
                     setSubmitting(true)
                     try {
                       const supabase = createAuthBrowserClient()
-                      const { data, error: signInError } =
-                        await supabase.auth.signInWithPassword({
-                          email: trimmed,
-                          password,
-                        })
-                      if (signInError) {
-                        setError(signInError.message)
-                        return
-                      }
-                      if (data.user) {
-                        setUser(data.user)
+                      if (authMode === 'login') {
+                        const { data, error: signInError } =
+                          await supabase.auth.signInWithPassword({
+                            email: trimmed,
+                            password,
+                          })
+                        if (signInError) {
+                          setError(signInError.message)
+                          return
+                        }
+                        if (data.user) {
+                          setUser(data.user)
+                        }
+                      } else {
+                        const { data, error: signUpError } =
+                          await supabase.auth.signUp({
+                            email: trimmed,
+                            password,
+                          })
+                        if (signUpError) {
+                          suppressNextSignedInRef.current = false
+                          setError(signUpError.message)
+                          return
+                        }
+                        suppressNextSignedInRef.current = Boolean(data.session)
+                        if (data.session) {
+                          await supabase.auth.signOut()
+                        }
+                        setUser(null)
+                        setMessage(SIGNUP_SUCCESS_MESSAGE)
+                        setAuthMode('login')
                       }
                     } catch (e) {
+                      suppressNextSignedInRef.current = false
                       setError(
                         e instanceof Error
                           ? e.message
-                          : 'Could not sign in. Please try again.'
+                          : authMode === 'login'
+                            ? 'Could not sign in. Please try again.'
+                            : 'Could not sign up. Please try again.'
                       )
                     } finally {
                       setSubmitting(false)
                     }
                   }}
                 >
-                  {submitting ? 'Working…' : 'Log in'}
+                  {submitting
+                    ? 'Working…'
+                    : authMode === 'login'
+                      ? 'Log in'
+                      : 'Create account'}
                 </button>
                 <button
                   type="button"
@@ -246,47 +277,14 @@ function HomeAuthForm() {
                   onClick={async () => {
                     setError(null)
                     setMessage(null)
-                    const trimmed = email.trim()
-                    if (!trimmed) {
-                      setError('Email is required.')
+                    if (authMode === 'login') {
+                      setAuthMode('signup')
                       return
                     }
-                    if (!password) {
-                      setError('Password is required.')
-                      return
-                    }
-                    setSubmitting(true)
-                    try {
-                      const supabase = createAuthBrowserClient()
-                      const { data, error: signUpError } =
-                        await supabase.auth.signUp({
-                          email: trimmed,
-                          password,
-                        })
-                      if (signUpError) {
-                        suppressNextSignedInRef.current = false
-                        setError(signUpError.message)
-                        return
-                      }
-                      suppressNextSignedInRef.current = Boolean(data.session)
-                      if (data.session) {
-                        await supabase.auth.signOut()
-                      }
-                      setUser(null)
-                      setMessage(SIGNUP_SUCCESS_MESSAGE)
-                    } catch (e) {
-                      suppressNextSignedInRef.current = false
-                      setError(
-                        e instanceof Error
-                          ? e.message
-                          : 'Could not sign up. Please try again.'
-                      )
-                    } finally {
-                      setSubmitting(false)
-                    }
+                    setAuthMode('login')
                   }}
                 >
-                  {submitting ? 'Working…' : 'Sign up'}
+                  {authMode === 'login' ? 'Create account' : 'Back to login'}
                 </button>
               </div>
             </div>
