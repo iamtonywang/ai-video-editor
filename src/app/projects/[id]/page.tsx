@@ -78,6 +78,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
   const [stoppingJob, setStoppingJob] = useState(false)
   const [stopJobError, setStopJobError] = useState<string | null>(null)
+  const [promptAccordionOpen, setPromptAccordionOpen] = useState(false)
+  const [previewInstruction, setPreviewInstruction] = useState('')
+  const [previewSubmitting, setPreviewSubmitting] = useState(false)
+  const [previewValidationError, setPreviewValidationError] = useState<string | null>(null)
+  const [previewSubmitError, setPreviewSubmitError] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<{
     job: null | {
       id: string
@@ -448,6 +453,50 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
+  async function handleRunPreview() {
+    setPreviewValidationError(null)
+    setPreviewSubmitError(null)
+
+    const instruction = previewInstruction.trim()
+    if (!instruction) {
+      setPreviewValidationError('Enter an instruction to run preview.')
+      return
+    }
+
+    if (!projectId) {
+      setPreviewValidationError('Project ID is required.')
+      return
+    }
+
+    setPreviewSubmitting(true)
+    try {
+      const response = await fetch('/api/job/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          job_type: 'preview',
+          status: 'queued',
+          instruction,
+        }),
+      })
+
+      const body = (await response.json()) as {
+        ok?: boolean
+        error?: string
+      }
+
+      if (!response.ok || !body.ok) {
+        setPreviewSubmitError(body.error ?? FALLBACK_ERROR_MESSAGE)
+      }
+    } catch {
+      setPreviewSubmitError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      await refreshJobStatus(projectId)
+      setPreviewSubmitting(false)
+    }
+  }
+
   const buttonStyle = useMemo(
     () =>
       ({
@@ -549,6 +598,52 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 ) : null}
               </div>
             )}
+          </section>
+
+          <section className={styles.promptCard} aria-label="Prompt">
+            <button
+              type="button"
+              className={styles.promptToggle}
+              aria-expanded={promptAccordionOpen}
+              onClick={() => setPromptAccordionOpen((open) => !open)}
+            >
+              Prompt
+            </button>
+            {promptAccordionOpen ? (
+              <>
+                <p className={styles.promptNotImplementedHint}>
+                  Preview pipeline is not implemented yet.
+                </p>
+                <textarea
+                  className={styles.promptTextarea}
+                  value={previewInstruction}
+                  onChange={(e) => setPreviewInstruction(e.target.value)}
+                  placeholder="Describe what you want to preview…"
+                  aria-label="Preview instruction"
+                  rows={5}
+                  disabled={previewSubmitting}
+                  spellCheck={true}
+                />
+                <button
+                  type="button"
+                  className={styles.promptRunButton}
+                  disabled={previewSubmitting}
+                  onClick={handleRunPreview}
+                >
+                  {previewSubmitting ? 'Running…' : 'Run Preview'}
+                </button>
+                {previewValidationError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {previewValidationError}
+                  </p>
+                ) : null}
+                {previewSubmitError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {previewSubmitError}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
           </section>
 
           <section className={styles.referenceCard} aria-label="Register reference asset">

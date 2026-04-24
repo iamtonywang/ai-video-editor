@@ -66,6 +66,100 @@
   gap: 10px;
 }
 
+.promptCard {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  padding: 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.promptToggle {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  background: transparent;
+  color: #111827;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.promptToggle:hover {
+  border-color: #b8b8b8;
+  background: rgba(235, 235, 235, 0.45);
+}
+
+.promptNotImplementedHint {
+  margin: 0;
+  width: 100%;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6b7280;
+  text-align: center;
+}
+
+.promptTextarea {
+  width: 100%;
+  max-width: 560px;
+  min-height: 120px;
+  border-radius: 14px;
+  border: 1px solid #d1d1d1;
+  padding: 0.75rem 0.9rem;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #111827;
+  background: rgba(255, 255, 255, 0.7);
+  outline: none;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.promptTextarea:focus {
+  border-color: #b8b8b8;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.promptTextarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.promptRunButton {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  background: transparent;
+  color: #111827;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.promptRunButton:hover {
+  border-color: #b8b8b8;
+  background: rgba(235, 235, 235, 0.45);
+}
+
+.promptRunButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .jobCard {
   width: 100%;
   max-width: 560px;
@@ -299,6 +393,10 @@
   }
 
   .referenceCard {
+    padding: 20px;
+  }
+
+  .promptCard {
     padding: 20px;
   }
 
