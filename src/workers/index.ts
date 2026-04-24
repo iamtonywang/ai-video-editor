@@ -29,11 +29,10 @@ function getErrorMessage(error: unknown) {
 
 type AnalyzeJobStatus = 'running' | 'success' | 'failed'
 
-async function assertDbResult<T extends { error: { message: string } | null }>(
+function assertDbResult<T extends { error: { message: string } | null }>(
   label: string,
-  promise: Promise<T>
+  result: T
 ) {
-  const result = await promise
   if (result.error) {
     throw new Error(`${label}: ${result.error.message}`)
   }
@@ -46,16 +45,14 @@ async function addJobEvent(params: {
   message: string
   payload?: Record<string, unknown>
 }) {
-  await assertDbResult(
-    'job_events_insert_failed',
-    supabaseServer.from('job_events').insert({
-      job_id: params.job_id,
-      level: params.level,
-      step: params.step,
-      message: params.message,
-      payload: params.payload ?? null,
-    })
-  )
+  const result = await supabaseServer.from('job_events').insert({
+    job_id: params.job_id,
+    level: params.level,
+    step: params.step,
+    message: params.message,
+    payload: params.payload ?? null,
+  })
+  assertDbResult('job_events_insert_failed', result)
 }
 
 async function updateAnalyzeJobStatus(params: {
@@ -68,21 +65,19 @@ async function updateAnalyzeJobStatus(params: {
   error_message?: string | null
 }) {
   const now = new Date().toISOString()
-  await assertDbResult(
-    `jobs_${params.status}_update_failed`,
-    supabaseServer
-      .from('jobs')
-      .update({
-        status: params.status,
-        progress: params.progress,
-        started_at: params.started_at,
-        finished_at: params.finished_at,
-        updated_at: now,
-        error_code: params.error_code ?? null,
-        error_message: params.error_message ?? null,
-      })
-      .eq('id', params.job_id)
-  )
+  const result = await supabaseServer
+    .from('jobs')
+    .update({
+      status: params.status,
+      progress: params.progress,
+      started_at: params.started_at,
+      finished_at: params.finished_at,
+      updated_at: now,
+      error_code: params.error_code ?? null,
+      error_message: params.error_message ?? null,
+    })
+    .eq('id', params.job_id)
+  assertDbResult(`jobs_${params.status}_update_failed`, result)
 }
 
 async function handleAnalyzeJob(payload: AnalyzePayload) {
