@@ -94,7 +94,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       created_at: string
       started_at: string | null
       finished_at: string | null
-      output_asset_key?: string | null
+      output_asset_key: string | null
     }
     latest_event: null | {
       level: string
@@ -145,7 +145,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 created_at: string
                 started_at: string | null
                 finished_at: string | null
-                output_asset_key?: string | null
+                output_asset_key: string | null
               }
               latest_event: null | {
                 level: string
@@ -305,13 +305,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const previewResultAssetKey = useMemo(() => {
     const job = jobStatus.job
     if (!job || job.job_type !== 'preview' || job.status !== 'success') return null
-    const fromApi = job.output_asset_key?.trim()
-    if (fromApi) return fromApi
-    if (jobStatus.latest_event?.step === 'preview_placeholder_completed') {
-      return 'placeholder-preview'
-    }
-    return null
-  }, [jobStatus.job, jobStatus.latest_event?.step])
+    const key = job.output_asset_key?.trim()
+    return key ? key : null
+  }, [jobStatus.job])
 
   useEffect(() => {
     if (!projectId) return

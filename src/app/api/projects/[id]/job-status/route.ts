@@ -48,7 +48,7 @@ export async function GET(_req: Request, context: RouteContext) {
     const { data: jobRow, error: jobError } = await supabaseAdmin
       .from('jobs')
       .select(
-        'id, job_type, status, progress, error_code, error_message, created_at, started_at, finished_at'
+        'id, job_type, status, progress, error_code, error_message, created_at, started_at, finished_at, output_asset_key'
       )
       .eq('project_id', project_id)
       .order('created_at', { ascending: false })
@@ -91,6 +91,10 @@ export async function GET(_req: Request, context: RouteContext) {
           created_at: jobRow.created_at,
           started_at: jobRow.started_at,
           finished_at: jobRow.finished_at,
+          output_asset_key:
+            jobRow.output_asset_key == null
+              ? null
+              : String(jobRow.output_asset_key),
         },
         latest_event: eventRow
           ? {
