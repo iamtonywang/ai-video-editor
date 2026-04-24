@@ -109,6 +109,10 @@
   text-align: center;
 }
 
+.previewResultDisclaimer {
+  margin-top: 8px;
+}
+
 .promptTextarea {
   width: 100%;
   max-width: 560px;

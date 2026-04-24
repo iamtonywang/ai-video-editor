@@ -94,6 +94,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       created_at: string
       started_at: string | null
       finished_at: string | null
+      output_asset_key?: string | null
     }
     latest_event: null | {
       level: string
@@ -144,6 +145,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 created_at: string
                 started_at: string | null
                 finished_at: string | null
+                output_asset_key?: string | null
               }
               latest_event: null | {
                 level: string
@@ -299,6 +301,17 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     const s = jobStatus.job?.status ?? ''
     return s === 'queued' || s === 'running'
   }, [jobStatus.job?.status])
+
+  const previewResultAssetKey = useMemo(() => {
+    const job = jobStatus.job
+    if (!job || job.job_type !== 'preview' || job.status !== 'success') return null
+    const fromApi = job.output_asset_key?.trim()
+    if (fromApi) return fromApi
+    if (jobStatus.latest_event?.step === 'preview_placeholder_completed') {
+      return 'placeholder-preview'
+    }
+    return null
+  }, [jobStatus.job, jobStatus.latest_event?.step])
 
   useEffect(() => {
     if (!projectId) return
@@ -599,6 +612,23 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
               </div>
             )}
           </section>
+
+          {previewResultAssetKey ? (
+            <section className={styles.jobCard} aria-label="Preview result">
+              <p className={styles.jobTitle}>Preview Result</p>
+              <div className={styles.jobGrid}>
+                <div className={styles.jobRow}>
+                  <span className={styles.jobKey}>output_asset_key</span>
+                  <span className={styles.jobValue}>{previewResultAssetKey}</span>
+                </div>
+              </div>
+              <p
+                className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
+              >
+                This is a placeholder preview. Real rendering is not connected yet.
+              </p>
+            </section>
+          ) : null}
 
           <section className={styles.promptCard} aria-label="Prompt">
             <button
