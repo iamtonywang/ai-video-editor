@@ -51,6 +51,42 @@
   color: #4b5563;
 }
 
+.welcome {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.welcomeTitle {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.welcomeEmail {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #4b5563;
+  word-break: break-all;
+}
+
+.welcomeHint {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: #6b7280;
+}
+
+.authLoading {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
 .input {
   width: 100%;
   box-sizing: border-box;
