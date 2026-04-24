@@ -612,11 +612,17 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           {previewResultAssetKey ? (
             <section className={styles.jobCard} aria-label="Preview result">
               <p className={styles.jobTitle}>Preview Result</p>
-              <div className={styles.jobGrid}>
-                <div className={styles.jobRow}>
-                  <span className={styles.jobKey}>output_asset_key</span>
-                  <span className={styles.jobValue}>{previewResultAssetKey}</span>
+              <div className={styles.previewViewerBlock}>
+                <p className={styles.previewViewerTitle}>Preview Viewer</p>
+                <div
+                  className={styles.previewViewerFrame}
+                  aria-hidden="true"
+                >
+                  <p className={styles.previewViewerPlaceholderLabel}>
+                    Preview placeholder
+                  </p>
                 </div>
+                <p className={styles.previewViewerKey}>{previewResultAssetKey}</p>
               </div>
               <p
                 className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}

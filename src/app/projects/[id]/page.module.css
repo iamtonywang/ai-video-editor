@@ -113,6 +113,58 @@
   margin-top: 8px;
 }
 
+.previewViewerBlock {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.previewViewerTitle {
+  margin: 0;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.3;
+  color: #6b7280;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.previewViewerFrame {
+  width: 100%;
+  max-width: 560px;
+  min-height: 160px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #3f3f46 0%, #27272a 100%);
+  border: 1px solid #d4d4d8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.previewViewerPlaceholderLabel {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.35;
+  color: #a1a1aa;
+  font-weight: 500;
+  text-align: center;
+}
+
+.previewViewerKey {
+  margin: 0;
+  width: 100%;
+  max-width: 560px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #374151;
+  text-align: center;
+  word-break: break-all;
+}
+
 .promptTextarea {
   width: 100%;
   max-width: 560px;
