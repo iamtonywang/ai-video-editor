@@ -206,7 +206,7 @@ export default function ProjectsPage() {
         {!loading && !needsLogin && !error && (
           <section className={styles.createCard} aria-label="Create new project">
             <form className={styles.createForm} onSubmit={handleCreateProject}>
-              <div className={styles.createRow}>
+              <div className={styles.createStack}>
                 <input
                   type="text"
                   value={newTitle}
