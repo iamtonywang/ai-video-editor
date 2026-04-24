@@ -59,6 +59,10 @@
   width: 100%;
 }
 
+.logoutButton {
+  margin-top: 0.25rem;
+}
+
 .welcomeTitle {
   margin: 0;
   font-size: 1.125rem;

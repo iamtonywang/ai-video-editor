@@ -26,6 +26,7 @@ function HomeAuthForm() {
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const suppressNextSignedInRef = useRef(false)
 
   useEffect(() => {
@@ -116,6 +117,37 @@ function HomeAuthForm() {
             <p className={styles.welcomeHint}>
               Project workspace will be available next.
             </p>
+            {error && (
+              <p className={authStyles.error} role="alert">
+                {error}
+              </p>
+            )}
+            <button
+              type="button"
+              className={`${styles.button} ${styles.logoutButton}`}
+              disabled={loggingOut}
+              onClick={async () => {
+                setError(null)
+                setMessage(null)
+                setLoggingOut(true)
+                try {
+                  const supabase = createAuthBrowserClient()
+                  await supabase.auth.signOut()
+                  setUser(null)
+                  setAuthLoading(false)
+                } catch (e) {
+                  setError(
+                    e instanceof Error
+                      ? e.message
+                      : 'Could not sign out. Please try again.'
+                  )
+                } finally {
+                  setLoggingOut(false)
+                }
+              }}
+            >
+              {loggingOut ? 'Signing out…' : 'Log out'}
+            </button>
           </div>
         )}
 
