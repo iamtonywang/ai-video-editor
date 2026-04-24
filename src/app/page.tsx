@@ -240,6 +240,7 @@ function HomeAuthForm() {
                 >
                   {submitting ? 'Working…' : 'Log in'}
                 </button>
+                <p className={styles.ctaHint}>Don't have an account?</p>
                 <Link
                   href="/signup"
                   className={authStyles.buttonSecondary}

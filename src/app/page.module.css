@@ -51,6 +51,15 @@
   color: #4b5563;
 }
 
+.ctaHint {
+  margin: 0.15rem 0 -0.15rem;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: #6b7280;
+  opacity: 0.9;
+  text-align: center;
+}
+
 .welcome {
   text-align: center;
   display: flex;
