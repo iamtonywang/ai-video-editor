@@ -16,6 +16,30 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+## Dev: run the worker
+
+Some features (e.g. `build_identity`) enqueue BullMQ jobs that are processed by a separate worker process.
+
+- **Terminal 1**:
+
+```bash
+npm run dev
+```
+
+- **Terminal 2**:
+
+```bash
+npm run worker
+```
+
+- **Optional (single command)**:
+
+```bash
+npm run dev:all
+```
+
+If the worker is not running, jobs will remain in **`queued`** and the Job Status panel may not advance (`queued → running → success/failed`), and `latest_event` may stay empty.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

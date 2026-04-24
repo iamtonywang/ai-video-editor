@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:all": "node -e \"const {spawn}=require('child_process'); const procs=[['npm',['run','dev']],['npm',['run','worker']]]; const children=procs.map(([cmd,args])=>spawn(cmd,args,{stdio:'inherit',shell:true})); const shutdown=()=>children.forEach(c=>{try{c.kill('SIGINT')}catch{}}); process.on('SIGINT',()=>{shutdown(); process.exit(130)}); children.forEach((c,i)=>c.on('exit',(code)=>{if(code&&code!==0){shutdown(); process.exit(code)} if(i===0){} }));\"",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
