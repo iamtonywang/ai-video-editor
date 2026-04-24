@@ -1,0 +1,35 @@
+.error {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: #b91c1c;
+  text-align: center;
+}
+
+.success {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: #047857;
+  text-align: center;
+}
+
+.subtle {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: #6b7280;
+  text-align: center;
+}
+
+.topLink {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-size: 0.875rem;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.topLink:hover {
+  text-decoration: underline;
+}

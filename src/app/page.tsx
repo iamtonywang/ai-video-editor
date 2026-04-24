@@ -1,6 +1,7 @@
 'use client'
 
 import { FormEvent, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import styles from './page.module.css'
 
@@ -23,6 +24,15 @@ export default function Home() {
           <p className={styles.subtitle}>AI Video Engine</p>
         </header>
         <p className={styles.hint}>Enter your project ID to continue</p>
+        <p className={styles.hint}>
+          <Link
+            href="/login"
+            style={{ color: '#2563eb', textDecoration: 'none' }}
+          >
+            Log in
+          </Link>
+          <span> to create projects (owner is saved on create API).</span>
+        </p>
 
         <form className={styles.form} onSubmit={handleSubmit}>
           <input
