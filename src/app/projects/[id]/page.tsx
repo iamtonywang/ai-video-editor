@@ -36,6 +36,12 @@ type PageProps = {
 
 const FALLBACK_ERROR_MESSAGE = 'Something went wrong.'
 
+const PLATFORM_URLS = {
+  youtube: 'https://www.youtube.com',
+  instagram: 'https://www.instagram.com',
+  tiktok: 'https://www.tiktok.com',
+} as const
+
 function mapApiErrorToUserMessage(code: string | undefined): string {
   switch (code) {
     case 'INVALID_PROJECT_ID':
@@ -748,7 +754,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       linkPlatform === 'youtube' ? styles.linkPlatformButtonActive : ''
                     }`}
                     aria-pressed={linkPlatform === 'youtube'}
-                    onClick={() => setLinkPlatform('youtube')}
+                    aria-label="Open YouTube"
+                    onClick={() => {
+                      setLinkPlatform('youtube')
+                      window.open(PLATFORM_URLS.youtube, '_blank', 'noopener,noreferrer')
+                    }}
                   >
                     YouTube
                   </button>
@@ -758,7 +768,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       linkPlatform === 'instagram' ? styles.linkPlatformButtonActive : ''
                     }`}
                     aria-pressed={linkPlatform === 'instagram'}
-                    onClick={() => setLinkPlatform('instagram')}
+                    aria-label="Open Instagram"
+                    onClick={() => {
+                      setLinkPlatform('instagram')
+                      window.open(PLATFORM_URLS.instagram, '_blank', 'noopener,noreferrer')
+                    }}
                   >
                     Instagram
                   </button>
@@ -768,7 +782,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       linkPlatform === 'tiktok' ? styles.linkPlatformButtonActive : ''
                     }`}
                     aria-pressed={linkPlatform === 'tiktok'}
-                    onClick={() => setLinkPlatform('tiktok')}
+                    aria-label="Open TikTok"
+                    onClick={() => {
+                      setLinkPlatform('tiktok')
+                      window.open(PLATFORM_URLS.tiktok, '_blank', 'noopener,noreferrer')
+                    }}
                   >
                     TikTok
                   </button>
