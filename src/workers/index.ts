@@ -1,4 +1,5 @@
 import { Worker } from 'bullmq'
+import sharp from 'sharp'
 import { redisConnection } from '@/lib/queue/redis'
 import { QUEUE_NAMES } from '@/lib/queue'
 import { supabaseServer } from '@/lib/supabase/server'
@@ -365,50 +366,182 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
   }
 }
 
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+const PREVIEW_TEXT_MAX = 800
+const PREVIEW_LINE_CHARS = 58
+const PREVIEW_MAX_LINES = 14
+const PREVIEW_LINE_HEIGHT = 28
+
+async function renderPreviewWebp(instruction: string): Promise<Buffer> {
+  const raw = instruction.trim() || '(no instruction)'
+  const body = raw.slice(0, PREVIEW_TEXT_MAX)
+  const lines: string[] = []
+  for (let i = 0; i < body.length && lines.length < PREVIEW_MAX_LINES; i += PREVIEW_LINE_CHARS) {
+    lines.push(body.slice(i, i + PREVIEW_LINE_CHARS))
+  }
+
+  const tspans = lines
+    .map((line, idx) => {
+      const dy = idx === 0 ? '0' : String(PREVIEW_LINE_HEIGHT)
+      return `<tspan x="48" dy="${dy}">${escapeXml(line)}</tspan>`
+    })
+    .join('')
+
+  const startY = 140
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="960" height="540" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100%" height="100%" fill="#111827"/>
+  <text x="48" y="72" font-family="system-ui, Segoe UI, sans-serif" font-size="26" font-weight="600" fill="#f9fafb">Non-AI preview</text>
+  <text x="48" y="${startY}" font-family="system-ui, Segoe UI, sans-serif" font-size="17" fill="#e5e7eb">${tspans}</text>
+</svg>`
+
+  return sharp(Buffer.from(svg, 'utf8')).webp({ quality: 82 }).toBuffer()
+}
+
 async function handlePreviewJob(payload: PreviewPayload) {
   const now = new Date().toISOString()
+  const jobId = payload.job_id
+  const projectId = payload.project_id
   const instructionLength = (payload.instruction ?? '').length
 
   await updateAnalyzeJobStatus({
-    job_id: payload.job_id,
+    job_id: jobId,
     status: 'running',
     progress: 5,
     started_at: now,
     error_code: null,
     error_message: null,
+    output_asset_key: null,
   })
 
   await addJobEvent({
-    job_id: payload.job_id,
+    job_id: jobId,
     level: 'info',
     step: 'preview_received',
     message: 'Preview job received',
     payload: {
-      project_id: payload.project_id,
+      project_id: projectId,
       job_type: 'preview',
       instruction_present: instructionLength > 0,
       instruction_length: instructionLength,
     },
   })
 
+  let webpBuffer: Buffer
+  try {
+    webpBuffer = await renderPreviewWebp(payload.instruction ?? '')
+  } catch (renderErr) {
+    const msg = getErrorMessage(renderErr)
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 5,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'PREVIEW_RENDER_FAILED',
+      error_message: msg,
+      output_asset_key: null,
+    })
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'preview_render_failed',
+      message: msg,
+      payload: {
+        job_id: jobId,
+        project_id: projectId,
+        job_type: 'preview',
+        error_code: 'PREVIEW_RENDER_FAILED',
+      },
+    })
+    throw renderErr
+  }
+
+  await addJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'preview_image_generated',
+    message: 'Preview WebP generated',
+    payload: {
+      instruction_length: instructionLength,
+      bytes: webpBuffer.length,
+    },
+  })
+
+  const objectPath = `projects/${projectId}/previews/${jobId}/preview.webp`
+  const uploadResult = await supabaseServer.storage
+    .from('project-media')
+    .upload(objectPath, webpBuffer, {
+      contentType: 'image/webp',
+      upsert: false,
+    })
+
+  if (uploadResult.error) {
+    const msg = uploadResult.error.message
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 5,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'PREVIEW_UPLOAD_FAILED',
+      error_message: msg,
+      output_asset_key: null,
+    })
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'preview_upload_failed',
+      message: msg,
+      payload: {
+        job_id: jobId,
+        project_id: projectId,
+        path: objectPath,
+        error_code: 'PREVIEW_UPLOAD_FAILED',
+      },
+    })
+    throw new Error(msg)
+  }
+
+  await addJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'preview_uploaded',
+    message: 'Preview uploaded to storage',
+    payload: {
+      path: objectPath,
+      bucket: 'project-media',
+    },
+  })
+
+  const finishedOk = new Date().toISOString()
   await updateAnalyzeJobStatus({
-    job_id: payload.job_id,
+    job_id: jobId,
     status: 'success',
     progress: 100,
     started_at: now,
-    finished_at: now,
+    finished_at: finishedOk,
     error_code: null,
     error_message: null,
-    output_asset_key: 'placeholder-preview',
+    output_asset_key: objectPath,
   })
 
   await addJobEvent({
-    job_id: payload.job_id,
+    job_id: jobId,
     level: 'info',
-    step: 'preview_placeholder_completed',
-    message: 'Preview placeholder completed',
+    step: 'preview_completed',
+    message: 'Preview job completed',
     payload: {
-      instruction_present: instructionLength > 0,
+      path: objectPath,
       instruction_length: instructionLength,
     },
   })
