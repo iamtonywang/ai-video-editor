@@ -126,7 +126,8 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const objectPath = `projects/${project_id}/references/${randomUUID()}.${extFromMime}`
+    const shortId = randomUUID().replace(/-/g, '').slice(0, 8)
+    const objectPath = `projects/${project_id}/references/ref_${shortId}.${extFromMime}`
 
     const { error: uploadError } = await supabaseAdmin.storage
       .from(BUCKET)
