@@ -40,6 +40,20 @@ npm run dev:all
 
 If the worker is not running, jobs will remain in **`queued`** and the Job Status panel may not advance (`queued → running → success/failed`), and `latest_event` may stay empty.
 
+## Supabase Storage (reference uploads — phase 1)
+
+Upload UI/API is not implemented yet. The following is **fixed by documentation** for the first implementation:
+
+| Topic | Convention |
+|--------|------------|
+| **Bucket** | `project-media` (create in Supabase dashboard) |
+| **Phase 1 asset** | `reference` only |
+| **Object path** | `projects/{projectId}/references/{uuid}.{ext}` (UUID basename — **not** the original filename) |
+| **`asset_key` in `/api/source/register`** | Same path **without** bucket prefix, e.g. `projects/{projectId}/references/{uuid}.png` |
+| **After upload** | `asset_type: reference`, `asset_status: validated` |
+
+**Important:** `asset_status: uploaded` does **not** satisfy current `identity` / execution-context checks; use `validated` until a real validation pipeline exists. See **[docs/storage-conventions.md](./docs/storage-conventions.md)** for the full spec and caveats.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
