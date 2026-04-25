@@ -666,7 +666,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
             {inputType === 'upload' ? (
               <section className={styles.referenceCard} aria-label="Source">
-                <p className={styles.referenceTitle}>파일 업로드</p>
                 <div
                   className={styles.sourceModeGroup}
                   role="group"
@@ -874,7 +873,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
           <div className={styles.workflowStep}>
             <section className={styles.generateCard} aria-label="Generate preview">
-              <p className={styles.generateTitle}>생성</p>
               <button
                 type="button"
                 className={styles.promptRunButton}
@@ -898,7 +896,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
           <div className={styles.workflowStep}>
             <section className={styles.jobCard} aria-label="Progress">
-              <p className={styles.jobTitle}>진행 상태</p>
               {jobStatusLoading ? (
                 <p className={styles.metaHint}>불러오는 중…</p>
               ) : jobStatusError ? (
@@ -966,9 +963,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           {shouldShowPreviewResult ? (
             <div className={styles.workflowStep}>
               <section className={styles.jobCard} aria-label="Result">
-                <p className={styles.jobTitle}>결과</p>
                 <div className={styles.previewViewerBlock}>
-                  <p className={styles.previewViewerTitle}>미리보기</p>
                   <div
                     className={styles.previewViewerFrame}
                   >

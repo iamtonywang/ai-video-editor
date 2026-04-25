@@ -346,17 +346,6 @@
   gap: 10px;
 }
 
-.previewViewerTitle {
-  margin: 0;
-  width: 100%;
-  font-size: 12px;
-  line-height: 1.3;
-  color: #6b7280;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  text-align: center;
-}
-
 .previewViewerFrame {
   width: 100%;
   max-width: 560px;
@@ -465,24 +454,6 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-}
-
-.generateTitle {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.3;
-  color: #6b7280;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.jobTitle {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.3;
-  color: #6b7280;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .jobGrid {
