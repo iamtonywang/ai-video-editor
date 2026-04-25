@@ -85,6 +85,12 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
   const [sourceMode, setSourceMode] = useState<'upload' | 'manual'>('upload')
 
+  const [inputType, setInputType] = useState<'ai' | 'upload' | 'link'>('upload')
+  const [linkPlatform, setLinkPlatform] = useState<'youtube' | 'instagram' | 'tiktok'>(
+    'youtube'
+  )
+  const [linkUrl, setLinkUrl] = useState('')
+
   const [jobStatusLoading, setJobStatusLoading] = useState(false)
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
   const [stoppingJob, setStoppingJob] = useState(false)
@@ -617,121 +623,211 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
         <section className={styles.actions}>
           <div className={styles.workflowStep}>
-            <section className={styles.referenceCard} aria-label="Source">
-              <p className={styles.referenceTitle}>Source</p>
-              <div
-                className={styles.sourceModeGroup}
-                role="group"
-                aria-label="Source input mode"
-              >
+            <section className={styles.inputTypeCard} aria-label="Input type">
+              <p className={styles.inputTypeTitle}>Input type</p>
+              <div className={styles.inputTypeGroup} role="group" aria-label="Input type">
                 <button
                   type="button"
-                  className={`${styles.sourceModeButton} ${
-                    sourceMode === 'upload' ? styles.sourceModeButtonActive : ''
+                  className={`${styles.inputTypeButton} ${
+                    inputType === 'ai' ? styles.inputTypeButtonActive : ''
                   }`}
-                  aria-pressed={sourceMode === 'upload'}
-                  onClick={() => setSourceMode('upload')}
+                  aria-pressed={inputType === 'ai'}
+                  onClick={() => setInputType('ai')}
+                >
+                  AI Generate
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.inputTypeButton} ${
+                    inputType === 'upload' ? styles.inputTypeButtonActive : ''
+                  }`}
+                  aria-pressed={inputType === 'upload'}
+                  onClick={() => setInputType('upload')}
                 >
                   Upload File
                 </button>
                 <button
                   type="button"
-                  className={`${styles.sourceModeButton} ${
-                    sourceMode === 'manual' ? styles.sourceModeButtonActive : ''
+                  className={`${styles.inputTypeButton} ${
+                    inputType === 'link' ? styles.inputTypeButtonActive : ''
                   }`}
-                  aria-pressed={sourceMode === 'manual'}
-                  onClick={() => setSourceMode('manual')}
+                  aria-pressed={inputType === 'link'}
+                  onClick={() => setInputType('link')}
                 >
-                  Advanced (Asset Key)
+                  Link / Platform
                 </button>
               </div>
-
-              {sourceMode === 'manual' ? (
-                <>
-                  <input
-                    type="text"
-                    value={referenceAssetKey}
-                    onChange={(e) => setReferenceAssetKey(e.target.value)}
-                    className={styles.referenceInput}
-                    placeholder="Storage path or asset key"
-                    aria-label="Reference asset key"
-                    disabled={registeringRef}
-                    spellCheck={false}
-                  />
-                  <button
-                    type="button"
-                    className={styles.referenceButton}
-                    disabled={registeringRef}
-                    onClick={handleRegisterReferenceAsset}
-                  >
-                    {registeringRef ? 'Saving…' : 'Save source'}
-                  </button>
-                  {referenceError ? (
-                    <p className={styles.referenceError} role="alert">
-                      {referenceError}
-                    </p>
-                  ) : null}
-                </>
-              ) : null}
-
-              {sourceMode === 'upload' ? (
-                <div className={styles.sourceUploadBlock}>
-                  <input
-                    ref={referenceFileInputRef}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className={styles.sourceFileInputHidden}
-                    disabled={uploadReferenceSubmitting || registeringRef}
-                    tabIndex={-1}
-                    aria-label="Reference image file"
-                    onChange={() => {
-                      setUploadReferenceValidationError(null)
-                      setUploadReferenceError(null)
-                      const inputEl = referenceFileInputRef.current
-                      const f = inputEl?.files?.[0]
-                      setReferenceChosenFileLabel(f?.name ?? '')
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className={styles.sourceChooseFileButton}
-                    disabled={uploadReferenceSubmitting || registeringRef}
-                    onClick={() => referenceFileInputRef.current?.click()}
-                  >
-                    Choose Reference File
-                  </button>
-                  <p className={styles.sourceFileNameLine} aria-live="polite">
-                    {referenceChosenFileLabel.trim()
-                      ? referenceChosenFileLabel
-                      : 'No file selected'}
-                  </p>
-                  <button
-                    type="button"
-                    className={styles.sourceUploadButton}
-                    disabled={uploadReferenceSubmitting || registeringRef}
-                    onClick={handleUploadReferenceFile}
-                  >
-                    {uploadReferenceSubmitting ? 'Uploading...' : 'Upload Reference File'}
-                  </button>
-                  {uploadReferenceValidationError ? (
-                    <p className={styles.referenceError} role="alert">
-                      {uploadReferenceValidationError}
-                    </p>
-                  ) : null}
-                  {uploadReferenceError ? (
-                    <p className={styles.referenceError} role="alert">
-                      {uploadReferenceError}
-                    </p>
-                  ) : null}
-                  {uploadReferenceAssetKey ? (
-                    <p className={styles.sourceUploadSuccess} aria-live="polite">
-                      Uploaded:{' '}
-                      <span className={styles.sourceUploadKey}>{uploadReferenceAssetKey}</span>
-                    </p>
-                  ) : null}
-                </div>
-              ) : null}
             </section>
+
+            {inputType === 'upload' ? (
+              <section className={styles.referenceCard} aria-label="Source">
+                <p className={styles.referenceTitle}>Source</p>
+                <div
+                  className={styles.sourceModeGroup}
+                  role="group"
+                  aria-label="Source input mode"
+                >
+                  <button
+                    type="button"
+                    className={`${styles.sourceModeButton} ${
+                      sourceMode === 'upload' ? styles.sourceModeButtonActive : ''
+                    }`}
+                    aria-pressed={sourceMode === 'upload'}
+                    onClick={() => setSourceMode('upload')}
+                  >
+                    Upload File
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.sourceModeButton} ${
+                      sourceMode === 'manual' ? styles.sourceModeButtonActive : ''
+                    }`}
+                    aria-pressed={sourceMode === 'manual'}
+                    onClick={() => setSourceMode('manual')}
+                  >
+                    Advanced (Asset Key)
+                  </button>
+                </div>
+
+                {sourceMode === 'manual' ? (
+                  <>
+                    <input
+                      type="text"
+                      value={referenceAssetKey}
+                      onChange={(e) => setReferenceAssetKey(e.target.value)}
+                      className={styles.referenceInput}
+                      placeholder="Storage path or asset key"
+                      aria-label="Reference asset key"
+                      disabled={registeringRef}
+                      spellCheck={false}
+                    />
+                    <button
+                      type="button"
+                      className={styles.referenceButton}
+                      disabled={registeringRef}
+                      onClick={handleRegisterReferenceAsset}
+                    >
+                      {registeringRef ? 'Saving…' : 'Save source'}
+                    </button>
+                    {referenceError ? (
+                      <p className={styles.referenceError} role="alert">
+                        {referenceError}
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+
+                {sourceMode === 'upload' ? (
+                  <div className={styles.sourceUploadBlock}>
+                    <input
+                      ref={referenceFileInputRef}
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      className={styles.sourceFileInputHidden}
+                      disabled={uploadReferenceSubmitting || registeringRef}
+                      tabIndex={-1}
+                      aria-label="Reference image file"
+                      onChange={() => {
+                        setUploadReferenceValidationError(null)
+                        setUploadReferenceError(null)
+                        const inputEl = referenceFileInputRef.current
+                        const f = inputEl?.files?.[0]
+                        setReferenceChosenFileLabel(f?.name ?? '')
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className={styles.sourceChooseFileButton}
+                      disabled={uploadReferenceSubmitting || registeringRef}
+                      onClick={() => referenceFileInputRef.current?.click()}
+                    >
+                      Choose Reference File
+                    </button>
+                    <p className={styles.sourceFileNameLine} aria-live="polite">
+                      {referenceChosenFileLabel.trim()
+                        ? referenceChosenFileLabel
+                        : 'No file selected'}
+                    </p>
+                    <button
+                      type="button"
+                      className={styles.sourceUploadButton}
+                      disabled={uploadReferenceSubmitting || registeringRef}
+                      onClick={handleUploadReferenceFile}
+                    >
+                      {uploadReferenceSubmitting ? 'Uploading...' : 'Upload Reference File'}
+                    </button>
+                    {uploadReferenceValidationError ? (
+                      <p className={styles.referenceError} role="alert">
+                        {uploadReferenceValidationError}
+                      </p>
+                    ) : null}
+                    {uploadReferenceError ? (
+                      <p className={styles.referenceError} role="alert">
+                        {uploadReferenceError}
+                      </p>
+                    ) : null}
+                    {uploadReferenceAssetKey ? (
+                      <p className={styles.sourceUploadSuccess} aria-live="polite">
+                        Uploaded:{' '}
+                        <span className={styles.sourceUploadKey}>{uploadReferenceAssetKey}</span>
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+
+            {inputType === 'link' ? (
+              <section className={styles.linkCard} aria-label="Link or platform source">
+                <p className={styles.referenceTitle}>Link / platform</p>
+                <div
+                  className={styles.linkPlatformGroup}
+                  role="group"
+                  aria-label="Platform preset"
+                >
+                  <button
+                    type="button"
+                    className={`${styles.linkPlatformButton} ${
+                      linkPlatform === 'youtube' ? styles.linkPlatformButtonActive : ''
+                    }`}
+                    aria-pressed={linkPlatform === 'youtube'}
+                    onClick={() => setLinkPlatform('youtube')}
+                  >
+                    YouTube
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.linkPlatformButton} ${
+                      linkPlatform === 'instagram' ? styles.linkPlatformButtonActive : ''
+                    }`}
+                    aria-pressed={linkPlatform === 'instagram'}
+                    onClick={() => setLinkPlatform('instagram')}
+                  >
+                    Instagram
+                  </button>
+                  <button
+                    type="button"
+                    className={`${styles.linkPlatformButton} ${
+                      linkPlatform === 'tiktok' ? styles.linkPlatformButtonActive : ''
+                    }`}
+                    aria-pressed={linkPlatform === 'tiktok'}
+                    onClick={() => setLinkPlatform('tiktok')}
+                  >
+                    TikTok
+                  </button>
+                </div>
+                <input
+                  type="url"
+                  value={linkUrl}
+                  onChange={(e) => setLinkUrl(e.target.value)}
+                  className={styles.referenceInput}
+                  placeholder="Paste a video URL"
+                  aria-label="Platform video URL"
+                  spellCheck={false}
+                />
+                <p className={styles.linkImportHint}>Link import is not connected yet.</p>
+              </section>
+            ) : null}
 
             <button
               type="button"
