@@ -90,6 +90,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     'youtube'
   )
   const [linkUrl, setLinkUrl] = useState('')
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const [jobStatusLoading, setJobStatusLoading] = useState(false)
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
@@ -1025,30 +1026,44 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           ) : null}
 
           <section className={styles.advancedSection} aria-label="Advanced status">
-            <p className={styles.advancedSectionTitle}>Advanced Status</p>
-            <p className={styles.advancedSectionHint}>
-              Project ID and technical readiness details.
-            </p>
-            <p className={styles.label}>Project ID</p>
-            <p className={styles.projectId}>{projectId || 'Unknown Project'}</p>
-            <section className={styles.advancedGateCard} aria-live="polite">
-              {loading ? (
-                <p className={styles.meta}>Loading detailed status…</p>
-              ) : errorMessage ? (
-                <p className={styles.error}>{errorMessage}</p>
-              ) : (
-                <>
-                  <p className={`${styles.statusText} ${statusClassName}`}>{status}</p>
-                  <p className={styles.meta}>
-                    measured_value: {measuredValue == null ? '-' : measuredValue}
-                  </p>
-                  <p className={styles.meta}>
-                    threshold: {threshold == null ? '-' : threshold}
-                  </p>
-                  {reasonCode ? <p className={styles.reason}>reason_code: {reasonCode}</p> : null}
-                </>
-              )}
-            </section>
+            <button
+              type="button"
+              className={styles.advancedToggle}
+              aria-expanded={advancedOpen}
+              onClick={() => setAdvancedOpen((open) => !open)}
+            >
+              <span>Advanced (optional)</span>
+              <span className={styles.advancedToggleIcon}>{advancedOpen ? '▲' : '▼'}</span>
+            </button>
+            {advancedOpen ? (
+              <div className={styles.advancedContent}>
+                <p className={styles.advancedSectionHint}>
+                  Project ID and technical readiness details.
+                </p>
+                <p className={styles.label}>Project ID</p>
+                <p className={styles.projectId}>{projectId || 'Unknown Project'}</p>
+                <section className={styles.advancedGateCard} aria-live="polite">
+                  {loading ? (
+                    <p className={styles.meta}>Loading detailed status…</p>
+                  ) : errorMessage ? (
+                    <p className={styles.error}>{errorMessage}</p>
+                  ) : (
+                    <>
+                      <p className={`${styles.statusText} ${statusClassName}`}>{status}</p>
+                      <p className={styles.meta}>
+                        measured_value: {measuredValue == null ? '-' : measuredValue}
+                      </p>
+                      <p className={styles.meta}>
+                        threshold: {threshold == null ? '-' : threshold}
+                      </p>
+                      {reasonCode ? (
+                        <p className={styles.reason}>reason_code: {reasonCode}</p>
+                      ) : null}
+                    </>
+                  )}
+                </section>
+              </div>
+            ) : null}
           </section>
         </section>
       </div>
