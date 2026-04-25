@@ -1,14 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_ASSET_TYPE = ['source', 'reference', 'audio', 'bg']
 const ALLOWED_ASSET_STATUS = ['uploaded', 'validated', 'active', 'failed', 'expired']
 
+function isValidProjectUuid(projectId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    projectId
+  )
+}
+
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
     const body = await req.json()
 
-    const project_id = body?.project_id
+    const project_id_raw = body?.project_id
+    const project_id =
+      typeof project_id_raw === 'string'
+        ? project_id_raw.trim()
+        : project_id_raw != null
+          ? String(project_id_raw).trim()
+          : ''
     const asset_type = typeof body?.asset_type === 'string' ? body.asset_type.trim() : ''
     const asset_key = typeof body?.asset_key === 'string' ? body.asset_key.trim() : ''
     const asset_status = typeof body?.asset_status === 'string' ? body.asset_status.trim() : ''
@@ -16,6 +38,13 @@ export async function POST(req: NextRequest) {
     if (!project_id || !asset_type || !asset_key || !asset_status) {
       return NextResponse.json(
         { ok: false, error: 'REQUIRED_FIELDS_MISSING' },
+        { status: 400 }
+      )
+    }
+
+    if (!isValidProjectUuid(project_id)) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_PROJECT_ID' },
         { status: 400 }
       )
     }
@@ -31,6 +60,27 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { ok: false, error: 'INVALID_ASSET_STATUS' },
         { status: 400 }
+      )
+    }
+
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', project_id)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
+      return NextResponse.json(
+        { ok: false, error: projectError.message },
+        { status: 500 }
+      )
+    }
+
+    if (!projectRow) {
+      return NextResponse.json(
+        { ok: false, error: 'PROJECT_NOT_FOUND' },
+        { status: 404 }
       )
     }
 
