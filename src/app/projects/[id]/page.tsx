@@ -615,17 +615,16 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     <main className={styles.page}>
       <div className={styles.container}>
         <header className={styles.header}>
-          <h1 className={styles.title}>Your project</h1>
+          <h1 className={styles.title}>내 프로젝트</h1>
           <p className={styles.headerSubtitle}>
-            Work through the steps below. Use Advanced only if you need IDs or
-            diagnostics.
+            필요한 내용을 입력하고 결과를 확인하세요.
           </p>
         </header>
 
         <section className={styles.actions}>
           <div className={styles.workflowStep}>
             <section className={styles.inputTypeCard} aria-label="Input type">
-              <p className={styles.inputTypeTitle}>Input type</p>
+              <p className={styles.inputTypeTitle}>작업 방식</p>
               <div className={styles.inputTypeGroup} role="group" aria-label="Input type">
                 <button
                   type="button"
@@ -635,7 +634,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   aria-pressed={inputType === 'ai'}
                   onClick={() => setInputType('ai')}
                 >
-                  AI Generate
+                  AI 생성
                 </button>
                 <button
                   type="button"
@@ -645,7 +644,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   aria-pressed={inputType === 'upload'}
                   onClick={() => setInputType('upload')}
                 >
-                  Upload File
+                  파일 업로드
                 </button>
                 <button
                   type="button"
@@ -655,17 +654,19 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   aria-pressed={inputType === 'link'}
                   onClick={() => setInputType('link')}
                 >
-                  Link / Platform
+                  링크 입력
                 </button>
               </div>
               {inputType === 'ai' ? (
-                <p className={styles.inputTypeHint}>Write a prompt to generate a preview.</p>
+                <p className={styles.inputTypeHint}>
+                  프롬프트를 입력하면 미리보기를 생성할 수 있습니다.
+                </p>
               ) : null}
             </section>
 
             {inputType === 'upload' ? (
               <section className={styles.referenceCard} aria-label="Source">
-                <p className={styles.referenceTitle}>Source</p>
+                <p className={styles.referenceTitle}>파일 업로드</p>
                 <div
                   className={styles.sourceModeGroup}
                   role="group"
@@ -679,7 +680,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     aria-pressed={sourceMode === 'upload'}
                     onClick={() => setSourceMode('upload')}
                   >
-                    Upload File
+                    파일 업로드
                   </button>
                   <button
                     type="button"
@@ -689,7 +690,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     aria-pressed={sourceMode === 'manual'}
                     onClick={() => setSourceMode('manual')}
                   >
-                    Advanced (Asset Key)
+                    고급 입력
                   </button>
                 </div>
 
@@ -711,7 +712,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       disabled={registeringRef}
                       onClick={handleRegisterReferenceAsset}
                     >
-                      {registeringRef ? 'Saving…' : 'Save source'}
+                      {registeringRef ? '저장 중…' : '저장'}
                     </button>
                     {referenceError ? (
                       <p className={styles.referenceError} role="alert">
@@ -745,12 +746,12 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       disabled={uploadReferenceSubmitting || registeringRef}
                       onClick={() => referenceFileInputRef.current?.click()}
                     >
-                      Choose Reference File
+                      파일 선택
                     </button>
                     <p className={styles.sourceFileNameLine} aria-live="polite">
                       {referenceChosenFileLabel.trim()
                         ? referenceChosenFileLabel
-                        : 'No file selected'}
+                        : '선택된 파일 없음'}
                     </p>
                     <button
                       type="button"
@@ -758,24 +759,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       disabled={uploadReferenceSubmitting || registeringRef}
                       onClick={handleUploadReferenceFile}
                     >
-                      {uploadReferenceSubmitting ? 'Uploading...' : 'Upload Reference File'}
+                      {uploadReferenceSubmitting ? '업로드 중…' : '업로드'}
                     </button>
-                    {uploadReferenceValidationError ? (
-                      <p className={styles.referenceError} role="alert">
-                        {uploadReferenceValidationError}
-                      </p>
-                    ) : null}
-                    {uploadReferenceError ? (
-                      <p className={styles.referenceError} role="alert">
-                        {uploadReferenceError}
-                      </p>
-                    ) : null}
-                    {uploadReferenceAssetKey ? (
-                      <p className={styles.sourceUploadSuccess} aria-live="polite">
-                        Uploaded:{' '}
-                        <span className={styles.sourceUploadKey}>{uploadReferenceAssetKey}</span>
-                      </p>
-                    ) : null}
                   </div>
                 ) : null}
               </section>
@@ -783,7 +768,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
             {inputType === 'link' ? (
               <section className={styles.linkCard} aria-label="Link or platform source">
-                <p className={styles.referenceTitle}>Link / platform</p>
+                <p className={styles.referenceTitle}>링크 입력</p>
                 <div
                   className={styles.linkPlatformGroup}
                   role="group"
@@ -825,38 +810,32 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   value={linkUrl}
                   onChange={(e) => setLinkUrl(e.target.value)}
                   className={styles.referenceInput}
-                  placeholder="Paste a video URL"
+                  placeholder="영상 URL을 입력하세요"
                   aria-label="Platform video URL"
                   spellCheck={false}
                 />
-                <p className={styles.linkImportHint}>Link import is not connected yet.</p>
+                <p className={styles.linkImportHint}>
+                  링크 불러오기는 아직 연결되지 않았습니다.
+                </p>
               </section>
             ) : null}
 
-            {inputType === 'upload' ? (
+            {inputType === 'upload' && sourceMode === 'upload' ? (
               <>
-                <button
-                  type="button"
-                  className={styles.actionButton}
-                  style={buttonStyle}
-                  disabled={actionDisabled}
-                  onClick={handleActionClick}
-                >
-                  {actionButtonText}
-                </button>
-                {availabilityHint ? (
-                  <p className={styles.metaHint}>
-                    {availabilityHint}
+                {uploadReferenceValidationError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {uploadReferenceValidationError}
                   </p>
                 ) : null}
-                {contextLoadError && !errorMessage ? (
-                  <p className={styles.metaHint}>
-                    {contextLoadError}
+                {uploadReferenceError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {uploadReferenceError}
                   </p>
                 ) : null}
-                {actionMessage ? (
-                  <p className={styles.metaHint}>
-                    {actionMessage}
+                {uploadReferenceAssetKey ? (
+                  <p className={styles.sourceUploadSuccess} aria-live="polite">
+                    업로드 완료:{' '}
+                    <span className={styles.sourceUploadKey}>{uploadReferenceAssetKey}</span>
                   </p>
                 ) : null}
               </>
@@ -871,18 +850,18 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 aria-expanded={promptAccordionOpen}
                 onClick={() => setPromptAccordionOpen((open) => !open)}
               >
-                Prompt
+                프롬프트
               </button>
               {promptAccordionOpen ? (
                 <>
                   <p className={styles.promptNotImplementedHint}>
-                    Preview placeholder completed. Real rendering is not connected yet.
+                    미리보기는 현재 임시 화면입니다. 실제 렌더링은 아직 연결되지 않았습니다.
                   </p>
                   <textarea
                     className={styles.promptTextarea}
                     value={previewInstruction}
                     onChange={(e) => setPreviewInstruction(e.target.value)}
-                    placeholder="Describe what you want to preview…"
+                    placeholder="원하는 미리보기 내용을 입력하세요…"
                     aria-label="Preview instruction"
                     rows={5}
                     disabled={previewSubmitting}
@@ -895,14 +874,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
           <div className={styles.workflowStep}>
             <section className={styles.generateCard} aria-label="Generate preview">
-              <p className={styles.generateTitle}>Generate</p>
+              <p className={styles.generateTitle}>생성</p>
               <button
                 type="button"
                 className={styles.promptRunButton}
                 disabled={previewSubmitting}
                 onClick={handleRunPreview}
               >
-                {previewSubmitting ? 'Running…' : 'Generate Preview'}
+                {previewSubmitting ? '생성 중…' : '생성하기'}
               </button>
               {previewValidationError ? (
                 <p className={styles.referenceError} role="alert">
@@ -919,46 +898,46 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
           <div className={styles.workflowStep}>
             <section className={styles.jobCard} aria-label="Progress">
-              <p className={styles.jobTitle}>Progress</p>
+              <p className={styles.jobTitle}>진행 상태</p>
               {jobStatusLoading ? (
-                <p className={styles.metaHint}>Loading…</p>
+                <p className={styles.metaHint}>불러오는 중…</p>
               ) : jobStatusError ? (
                 <p className={styles.referenceError} role="alert">
                   {jobStatusError}
                 </p>
               ) : !jobStatus.job ? (
-                <p className={styles.metaHint}>No job yet</p>
+                <p className={styles.metaHint}>아직 작업이 없습니다</p>
               ) : (
                 <div className={styles.jobGrid}>
                   <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>Task type</span>
+                    <span className={styles.jobKey}>작업 종류</span>
                     <span className={styles.jobValue}>{jobStatus.job.job_type}</span>
                   </div>
                   <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>Status</span>
+                    <span className={styles.jobKey}>상태</span>
                     <span className={styles.jobValue}>{jobStatus.job.status}</span>
                   </div>
                   <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>Progress</span>
+                    <span className={styles.jobKey}>진행률</span>
                     <span className={styles.jobValue}>
                       {jobStatus.job.progress == null ? '-' : jobStatus.job.progress}
                     </span>
                   </div>
                   <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>Latest update</span>
+                    <span className={styles.jobKey}>최근 업데이트</span>
                     <span className={styles.jobValue}>
                       {jobStatus.latest_event?.message ?? '-'}
                     </span>
                   </div>
                   {jobStatus.job.error_code ? (
                     <div className={styles.jobRow}>
-                      <span className={styles.jobKey}>Error code</span>
+                      <span className={styles.jobKey}>오류 코드</span>
                       <span className={styles.jobValue}>{jobStatus.job.error_code}</span>
                     </div>
                   ) : null}
                   {jobStatus.job.error_message ? (
                     <div className={styles.jobRow}>
-                      <span className={styles.jobKey}>Message</span>
+                      <span className={styles.jobKey}>메시지</span>
                       <span className={styles.jobValue}>{jobStatus.job.error_message}</span>
                     </div>
                   ) : null}
@@ -987,9 +966,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           {shouldShowPreviewResult ? (
             <div className={styles.workflowStep}>
               <section className={styles.jobCard} aria-label="Result">
-                <p className={styles.jobTitle}>Result</p>
+                <p className={styles.jobTitle}>결과</p>
                 <div className={styles.previewViewerBlock}>
-                  <p className={styles.previewViewerTitle}>Preview Viewer</p>
+                  <p className={styles.previewViewerTitle}>미리보기</p>
                   <div
                     className={styles.previewViewerFrame}
                   >
@@ -1008,7 +987,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       />
                     ) : (
                       <p className={styles.previewViewerPlaceholderLabel}>
-                        Preview placeholder
+                        미리보기 준비 중
                       </p>
                     )}
                   </div>
@@ -1018,7 +997,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   <p
                     className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
                   >
-                    This is a placeholder preview. Real rendering is not connected yet.
+                    미리보기는 현재 임시 화면입니다. 실제 렌더링은 아직 연결되지 않았습니다.
                   </p>
                 ) : null}
               </section>
@@ -1032,19 +1011,19 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
               aria-expanded={advancedOpen}
               onClick={() => setAdvancedOpen((open) => !open)}
             >
-              <span>Advanced (optional)</span>
+              <span>고급 정보</span>
               <span className={styles.advancedToggleIcon}>{advancedOpen ? '▲' : '▼'}</span>
             </button>
             {advancedOpen ? (
               <div className={styles.advancedContent}>
                 <p className={styles.advancedSectionHint}>
-                  Project ID and technical readiness details.
+                  기술 확인이 필요할 때만 확인하세요.
                 </p>
-                <p className={styles.label}>Project ID</p>
-                <p className={styles.projectId}>{projectId || 'Unknown Project'}</p>
+                <p className={styles.label}>프로젝트 ID</p>
+                <p className={styles.projectId}>{projectId || '알 수 없음'}</p>
                 <section className={styles.advancedGateCard} aria-live="polite">
                   {loading ? (
-                    <p className={styles.meta}>Loading detailed status…</p>
+                    <p className={styles.meta}>상세 상태를 불러오는 중…</p>
                   ) : errorMessage ? (
                     <p className={styles.error}>{errorMessage}</p>
                   ) : (
@@ -1062,6 +1041,24 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     </>
                   )}
                 </section>
+                {inputType === 'upload' ? (
+                  <>
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      style={buttonStyle}
+                      disabled={actionDisabled}
+                      onClick={handleActionClick}
+                    >
+                      {actionButtonText}
+                    </button>
+                    {availabilityHint ? <p className={styles.metaHint}>{availabilityHint}</p> : null}
+                    {contextLoadError && !errorMessage ? (
+                      <p className={styles.metaHint}>{contextLoadError}</p>
+                    ) : null}
+                    {actionMessage ? <p className={styles.metaHint}>{actionMessage}</p> : null}
+                  </>
+                ) : null}
               </div>
             ) : null}
           </section>
