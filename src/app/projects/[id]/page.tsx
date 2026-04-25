@@ -617,8 +617,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
         <section className={styles.actions}>
           <div className={styles.workflowStep}>
-            <section className={styles.referenceCard} aria-label="Step 1 source">
-              <p className={styles.referenceTitle}>Step 1. Source</p>
+            <section className={styles.referenceCard} aria-label="Source">
+              <p className={styles.referenceTitle}>Source</p>
               <div
                 className={styles.sourceModeGroup}
                 role="group"
@@ -760,14 +760,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           </div>
 
           <div className={styles.workflowStep}>
-            <section className={styles.promptCard} aria-label="Step 2 prompt">
+            <section className={styles.promptCard} aria-label="Prompt">
               <button
                 type="button"
                 className={styles.promptToggle}
                 aria-expanded={promptAccordionOpen}
                 onClick={() => setPromptAccordionOpen((open) => !open)}
               >
-                Step 2. Prompt
+                Prompt
               </button>
               {promptAccordionOpen ? (
                 <>
@@ -784,35 +784,38 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     disabled={previewSubmitting}
                     spellCheck={true}
                   />
-                  <div className={styles.stepGenerateBlock}>
-                    <p className={styles.stepGenerateLabel}>Step 3. Generate / Preview</p>
-                    <button
-                      type="button"
-                      className={styles.promptRunButton}
-                      disabled={previewSubmitting}
-                      onClick={handleRunPreview}
-                    >
-                      {previewSubmitting ? 'Running…' : 'Run Preview'}
-                    </button>
-                  </div>
-                  {previewValidationError ? (
-                    <p className={styles.referenceError} role="alert">
-                      {previewValidationError}
-                    </p>
-                  ) : null}
-                  {previewSubmitError ? (
-                    <p className={styles.referenceError} role="alert">
-                      {previewSubmitError}
-                    </p>
-                  ) : null}
                 </>
               ) : null}
             </section>
           </div>
 
           <div className={styles.workflowStep}>
-            <section className={styles.jobCard} aria-label="Step 4 progress">
-              <p className={styles.jobTitle}>Step 4. Progress</p>
+            <section className={styles.generateCard} aria-label="Generate preview">
+              <p className={styles.generateTitle}>Generate</p>
+              <button
+                type="button"
+                className={styles.promptRunButton}
+                disabled={previewSubmitting}
+                onClick={handleRunPreview}
+              >
+                {previewSubmitting ? 'Running…' : 'Generate Preview'}
+              </button>
+              {previewValidationError ? (
+                <p className={styles.referenceError} role="alert">
+                  {previewValidationError}
+                </p>
+              ) : null}
+              {previewSubmitError ? (
+                <p className={styles.referenceError} role="alert">
+                  {previewSubmitError}
+                </p>
+              ) : null}
+            </section>
+          </div>
+
+          <div className={styles.workflowStep}>
+            <section className={styles.jobCard} aria-label="Progress">
+              <p className={styles.jobTitle}>Progress</p>
               {jobStatusLoading ? (
                 <p className={styles.metaHint}>Loading…</p>
               ) : jobStatusError ? (
@@ -879,8 +882,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
           {shouldShowPreviewResult ? (
             <div className={styles.workflowStep}>
-              <section className={styles.jobCard} aria-label="Step 5 result">
-                <p className={styles.jobTitle}>Step 5. Result</p>
+              <section className={styles.jobCard} aria-label="Result">
+                <p className={styles.jobTitle}>Result</p>
                 <div className={styles.previewViewerBlock}>
                   <p className={styles.previewViewerTitle}>Preview Viewer</p>
                   <div
