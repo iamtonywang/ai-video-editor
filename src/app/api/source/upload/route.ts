@@ -7,6 +7,7 @@ import {
   isValidProjectUuid,
   verifyProjectOwnershipForUser,
 } from '@/lib/server/insert-source-asset'
+import { cleanupOldReferenceUploadsAfterNewReference } from '@/lib/server/cleanup-old-reference-uploads'
 
 const BUCKET = 'project-media'
 
@@ -163,6 +164,20 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    let cleanup_deleted_count = 0
+    let cleanup_skipped_reason: string | null = null
+    try {
+      const cleanup = await cleanupOldReferenceUploadsAfterNewReference({
+        project_id,
+        new_source_asset_id: insertResult.data.id,
+      })
+      cleanup_deleted_count = cleanup.cleanup_deleted_count
+      cleanup_skipped_reason = cleanup.cleanup_skipped_reason
+    } catch (cleanupErr) {
+      console.warn('[reference-upload-cleanup] unexpected error:', cleanupErr)
+      cleanup_skipped_reason = 'CLEANUP_EXCEPTION'
+    }
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -171,6 +186,8 @@ export async function POST(req: NextRequest) {
         asset_type: 'reference' as const,
         asset_key: insertResult.data.asset_key,
         asset_status: 'validated' as const,
+        cleanup_deleted_count,
+        cleanup_skipped_reason,
       },
     })
   } catch (error) {
