@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import styles from './page.module.css'
 
 type GateStatus = 'passed' | 'blocked' | 'no_gate'
@@ -73,6 +73,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [referenceAssetKey, setReferenceAssetKey] = useState('')
   const [registeringRef, setRegisteringRef] = useState(false)
   const [referenceError, setReferenceError] = useState<string | null>(null)
+
+  const referenceFileInputRef = useRef<HTMLInputElement>(null)
+  const [uploadReferenceSubmitting, setUploadReferenceSubmitting] = useState(false)
+  const [uploadReferenceValidationError, setUploadReferenceValidationError] = useState<
+    string | null
+  >(null)
+  const [uploadReferenceError, setUploadReferenceError] = useState<string | null>(null)
+  const [uploadReferenceAssetKey, setUploadReferenceAssetKey] = useState<string | null>(null)
 
   const [jobStatusLoading, setJobStatusLoading] = useState(false)
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
@@ -377,6 +385,67 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
+  async function handleUploadReferenceFile() {
+    setUploadReferenceValidationError(null)
+    setUploadReferenceError(null)
+
+    if (!projectId) {
+      setUploadReferenceValidationError('Project ID is required.')
+      return
+    }
+
+    const input = referenceFileInputRef.current
+    const file = input?.files?.[0] ?? null
+    if (!file) {
+      setUploadReferenceValidationError('Select a JPEG, PNG, or WebP file to upload.')
+      return
+    }
+
+    const allowed = new Set(['image/jpeg', 'image/png', 'image/webp'])
+    if (!allowed.has(file.type)) {
+      setUploadReferenceValidationError('Only JPEG, PNG, or WebP images are allowed.')
+      return
+    }
+
+    setUploadReferenceSubmitting(true)
+    try {
+      const formData = new FormData()
+      formData.append('project_id', projectId)
+      formData.append('file', file)
+
+      const response = await fetch('/api/source/upload', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const body = (await response.json()) as {
+        ok?: boolean
+        error?: string
+        data?: { asset_key?: string }
+      }
+
+      if (!response.ok || !body.ok) {
+        setUploadReferenceError(body.error ?? FALLBACK_ERROR_MESSAGE)
+        return
+      }
+
+      const key = body.data?.asset_key
+      if (key) {
+        setUploadReferenceAssetKey(key)
+      }
+      if (input) input.value = ''
+      await Promise.all([
+        refreshExecutionContext(projectId),
+        refreshGateStatus(projectId),
+        refreshJobStatus(projectId),
+      ])
+    } catch {
+      setUploadReferenceError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setUploadReferenceSubmitting(false)
+    }
+  }
+
   async function handleActionClick() {
     if (status === 'passed') return
     if (!canRunIdentity || isSubmitting || !projectId) return
@@ -553,6 +622,44 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   {referenceError}
                 </p>
               ) : null}
+
+              <div className={styles.sourceUploadBlock}>
+                <input
+                  ref={referenceFileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className={styles.sourceFileInput}
+                  disabled={uploadReferenceSubmitting || registeringRef}
+                  aria-label="Reference image file"
+                  onChange={() => {
+                    setUploadReferenceValidationError(null)
+                    setUploadReferenceError(null)
+                  }}
+                />
+                <button
+                  type="button"
+                  className={styles.sourceUploadButton}
+                  disabled={uploadReferenceSubmitting || registeringRef}
+                  onClick={handleUploadReferenceFile}
+                >
+                  {uploadReferenceSubmitting ? 'Uploading...' : 'Upload Reference File'}
+                </button>
+                {uploadReferenceValidationError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {uploadReferenceValidationError}
+                  </p>
+                ) : null}
+                {uploadReferenceError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {uploadReferenceError}
+                  </p>
+                ) : null}
+                {uploadReferenceAssetKey ? (
+                  <p className={styles.sourceUploadSuccess} aria-live="polite">
+                    Uploaded: <span className={styles.sourceUploadKey}>{uploadReferenceAssetKey}</span>
+                  </p>
+                ) : null}
+              </div>
             </section>
 
             <button

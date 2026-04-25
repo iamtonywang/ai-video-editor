@@ -437,6 +437,72 @@
   cursor: not-allowed;
 }
 
+.sourceUploadBlock {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+  margin-top: 6px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.sourceFileInput {
+  width: 100%;
+  max-width: 560px;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #374151;
+}
+
+.sourceFileInput:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sourceUploadButton {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  background: transparent;
+  color: #111827;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.sourceUploadButton:hover {
+  border-color: #b8b8b8;
+  background: rgba(235, 235, 235, 0.45);
+}
+
+.sourceUploadButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sourceUploadSuccess {
+  margin: 0;
+  width: 100%;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #374151;
+  text-align: center;
+  word-break: break-all;
+}
+
+.sourceUploadKey {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #111827;
+}
+
 .referenceError {
   margin: 0;
   font-size: 14px;
