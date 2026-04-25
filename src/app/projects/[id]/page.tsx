@@ -83,8 +83,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [uploadReferenceAssetKey, setUploadReferenceAssetKey] = useState<string | null>(null)
   const [referenceChosenFileLabel, setReferenceChosenFileLabel] = useState('')
 
-  const [sourceMode, setSourceMode] = useState<'upload' | 'manual'>('upload')
-
   const [inputType, setInputType] = useState<'ai' | 'upload' | 'link'>('upload')
   const [linkPlatform, setLinkPlatform] = useState<'youtube' | 'instagram' | 'tiktok'>(
     'youtube'
@@ -666,34 +664,47 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
             {inputType === 'upload' ? (
               <section className={styles.referenceCard} aria-label="Source">
-                <div
-                  className={styles.sourceModeGroup}
-                  role="group"
-                  aria-label="Source input mode"
-                >
+                <div className={styles.sourceUploadBlock}>
+                  <input
+                    ref={referenceFileInputRef}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className={styles.sourceFileInputHidden}
+                    disabled={uploadReferenceSubmitting || registeringRef}
+                    tabIndex={-1}
+                    aria-label="Reference image file"
+                    onChange={() => {
+                      setUploadReferenceValidationError(null)
+                      setUploadReferenceError(null)
+                      const inputEl = referenceFileInputRef.current
+                      const f = inputEl?.files?.[0]
+                      setReferenceChosenFileLabel(f?.name ?? '')
+                    }}
+                  />
                   <button
                     type="button"
-                    className={`${styles.sourceModeButton} ${
-                      sourceMode === 'upload' ? styles.sourceModeButtonActive : ''
-                    }`}
-                    aria-pressed={sourceMode === 'upload'}
-                    onClick={() => setSourceMode('upload')}
+                    className={styles.sourceChooseFileButton}
+                    disabled={uploadReferenceSubmitting || registeringRef}
+                    onClick={() => referenceFileInputRef.current?.click()}
                   >
-                    파일 업로드
+                    파일 선택
                   </button>
+                  <p className={styles.sourceFileNameLine} aria-live="polite">
+                    {referenceChosenFileLabel.trim()
+                      ? referenceChosenFileLabel
+                      : '선택된 파일 없음'}
+                  </p>
                   <button
                     type="button"
-                    className={`${styles.sourceModeButton} ${
-                      sourceMode === 'manual' ? styles.sourceModeButtonActive : ''
-                    }`}
-                    aria-pressed={sourceMode === 'manual'}
-                    onClick={() => setSourceMode('manual')}
+                    className={styles.sourceUploadButton}
+                    disabled={uploadReferenceSubmitting || registeringRef}
+                    onClick={handleUploadReferenceFile}
                   >
-                    고급 입력
+                    {uploadReferenceSubmitting ? '업로드 중…' : '업로드'}
                   </button>
                 </div>
 
-                {sourceMode === 'manual' ? (
+                {false ? (
                   <>
                     <input
                       type="text"
@@ -719,48 +730,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       </p>
                     ) : null}
                   </>
-                ) : null}
-
-                {sourceMode === 'upload' ? (
-                  <div className={styles.sourceUploadBlock}>
-                    <input
-                      ref={referenceFileInputRef}
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className={styles.sourceFileInputHidden}
-                      disabled={uploadReferenceSubmitting || registeringRef}
-                      tabIndex={-1}
-                      aria-label="Reference image file"
-                      onChange={() => {
-                        setUploadReferenceValidationError(null)
-                        setUploadReferenceError(null)
-                        const inputEl = referenceFileInputRef.current
-                        const f = inputEl?.files?.[0]
-                        setReferenceChosenFileLabel(f?.name ?? '')
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className={styles.sourceChooseFileButton}
-                      disabled={uploadReferenceSubmitting || registeringRef}
-                      onClick={() => referenceFileInputRef.current?.click()}
-                    >
-                      파일 선택
-                    </button>
-                    <p className={styles.sourceFileNameLine} aria-live="polite">
-                      {referenceChosenFileLabel.trim()
-                        ? referenceChosenFileLabel
-                        : '선택된 파일 없음'}
-                    </p>
-                    <button
-                      type="button"
-                      className={styles.sourceUploadButton}
-                      disabled={uploadReferenceSubmitting || registeringRef}
-                      onClick={handleUploadReferenceFile}
-                    >
-                      {uploadReferenceSubmitting ? '업로드 중…' : '업로드'}
-                    </button>
-                  </div>
                 ) : null}
               </section>
             ) : null}
@@ -819,7 +788,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
               </section>
             ) : null}
 
-            {inputType === 'upload' && sourceMode === 'upload' ? (
+            {inputType === 'upload' ? (
               <>
                 {uploadReferenceValidationError ? (
                   <p className={styles.referenceError} role="alert">
