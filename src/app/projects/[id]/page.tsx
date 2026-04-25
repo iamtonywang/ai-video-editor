@@ -92,6 +92,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [previewSubmitting, setPreviewSubmitting] = useState(false)
   const [previewValidationError, setPreviewValidationError] = useState<string | null>(null)
   const [previewSubmitError, setPreviewSubmitError] = useState<string | null>(null)
+  const [previewImageFailed, setPreviewImageFailed] = useState(false)
   const [jobStatus, setJobStatus] = useState<{
     job: null | {
       id: string
@@ -317,6 +318,22 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     const key = job.output_asset_key?.trim()
     return key ? key : null
   }, [jobStatus.job])
+
+  const shouldShowPreviewResult = useMemo(() => {
+    const job = jobStatus.job
+    return !!job && job.job_type === 'preview' && job.status === 'success'
+  }, [jobStatus.job?.job_type, jobStatus.job?.status])
+
+  const previewImageUrl = useMemo(() => {
+    if (!previewResultAssetKey) return null
+    const base = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
+    if (!base) return null
+    return `${base}/storage/v1/object/public/project-media/${previewResultAssetKey}`
+  }, [previewResultAssetKey])
+
+  useEffect(() => {
+    setPreviewImageFailed(false)
+  }, [previewResultAssetKey])
 
   useEffect(() => {
     if (!projectId) return
@@ -824,7 +841,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             </section>
           </div>
 
-          {previewResultAssetKey ? (
+          {shouldShowPreviewResult ? (
             <div className={styles.workflowStep}>
               <section className={styles.jobCard} aria-label="Step 5 result">
                 <p className={styles.jobTitle}>Step 5. Result</p>
@@ -832,19 +849,35 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   <p className={styles.previewViewerTitle}>Preview Viewer</p>
                   <div
                     className={styles.previewViewerFrame}
-                    aria-hidden="true"
                   >
-                    <p className={styles.previewViewerPlaceholderLabel}>
-                      Preview placeholder
-                    </p>
+                    {previewImageUrl && !previewImageFailed ? (
+                      <img
+                        src={previewImageUrl}
+                        alt="preview"
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          borderRadius: 12,
+                          display: 'block',
+                        }}
+                        onError={() => setPreviewImageFailed(true)}
+                      />
+                    ) : (
+                      <p className={styles.previewViewerPlaceholderLabel}>
+                        Preview placeholder
+                      </p>
+                    )}
                   </div>
-                  <p className={styles.previewViewerKey}>{previewResultAssetKey}</p>
+                  <p className={styles.previewViewerKey}>{previewResultAssetKey ?? '-'}</p>
                 </div>
-                <p
-                  className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
-                >
-                  This is a placeholder preview. Real rendering is not connected yet.
-                </p>
+                {!previewImageUrl || previewImageFailed ? (
+                  <p
+                    className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
+                  >
+                    This is a placeholder preview. Real rendering is not connected yet.
+                  </p>
+                ) : null}
               </section>
             </div>
           ) : null}
