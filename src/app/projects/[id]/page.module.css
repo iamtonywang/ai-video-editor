@@ -124,6 +124,21 @@
   text-align: center;
 }
 
+/* Gate / readiness box in Advanced — same shell as jobCard / referenceCard */
+.advancedGateCard {
+  width: 100%;
+  max-width: 560px;
+  box-sizing: border-box;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  padding: 16px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
 .referenceCard {
   width: 100%;
   max-width: 560px;
@@ -516,6 +531,10 @@
   }
 
   .card {
+    padding: 20px;
+  }
+
+  .advancedGateCard {
     padding: 20px;
   }
 

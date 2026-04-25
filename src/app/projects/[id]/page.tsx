@@ -731,7 +731,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             </p>
             <p className={styles.label}>Project ID</p>
             <p className={styles.projectId}>{projectId || 'Unknown Project'}</p>
-            <section className={styles.card} aria-live="polite">
+            <section className={styles.advancedGateCard} aria-live="polite">
               {loading ? (
                 <p className={styles.meta}>Loading detailed status…</p>
               ) : errorMessage ? (
