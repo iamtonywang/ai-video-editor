@@ -78,6 +78,24 @@ export async function GET(_req: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: eventError.message }, { status: 500 })
     }
 
+    const outputAssetKey =
+      jobRow.output_asset_key == null ? null : String(jobRow.output_asset_key).trim()
+
+    let preview_url: string | null = null
+    if (
+      jobRow.job_type === 'preview' &&
+      jobRow.status === 'success' &&
+      outputAssetKey &&
+      outputAssetKey !== ''
+    ) {
+      const signed = await supabaseAdmin.storage
+        .from('project-media')
+        .createSignedUrl(outputAssetKey, 3600)
+      if (!signed.error && signed.data?.signedUrl) {
+        preview_url = signed.data.signedUrl
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -91,10 +109,8 @@ export async function GET(_req: Request, context: RouteContext) {
           created_at: jobRow.created_at,
           started_at: jobRow.started_at,
           finished_at: jobRow.finished_at,
-          output_asset_key:
-            jobRow.output_asset_key == null
-              ? null
-              : String(jobRow.output_asset_key),
+          output_asset_key: outputAssetKey ? outputAssetKey : null,
+          preview_url,
         },
         latest_event: eventRow
           ? {

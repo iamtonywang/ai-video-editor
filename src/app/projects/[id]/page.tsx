@@ -105,6 +105,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       started_at: string | null
       finished_at: string | null
       output_asset_key: string | null
+      preview_url?: string | null
     }
     latest_event: null | {
       level: string
@@ -156,6 +157,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 started_at: string | null
                 finished_at: string | null
                 output_asset_key: string | null
+                preview_url: string | null
               }
               latest_event: null | {
                 level: string
@@ -325,11 +327,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   }, [jobStatus.job?.job_type, jobStatus.job?.status])
 
   const previewImageUrl = useMemo(() => {
-    if (!previewResultAssetKey) return null
-    const base = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
-    if (!base) return null
-    return `${base}/storage/v1/object/public/project-media/${previewResultAssetKey}`
-  }, [previewResultAssetKey])
+    const u = jobStatus.job?.preview_url?.trim()
+    return u ? u : null
+  }, [jobStatus.job?.preview_url])
 
   useEffect(() => {
     setPreviewImageFailed(false)
