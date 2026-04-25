@@ -279,7 +279,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     if (isSubmitting) return 'Building...'
     if (hasRunningBuildIdentity) return 'Building...'
     if (status === 'blocked') return 'Retry Identity Build'
-    return 'Run Identity Check'
+    return 'Prepare Source'
   }, [status, isSubmitting, hasRunningBuildIdentity])
 
   const actionDisabled = useMemo(() => {
@@ -519,216 +519,237 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     <main className={styles.page}>
       <div className={styles.container}>
         <header className={styles.header}>
-          <p className={styles.label}>Project</p>
-          <p className={styles.projectId}>{projectId || 'Unknown Project'}</p>
-          <h1 className={styles.title}>Gate Status</h1>
+          <h1 className={styles.title}>Your project</h1>
+          <p className={styles.headerSubtitle}>
+            Work through the steps below. Use Advanced only if you need IDs or
+            diagnostics.
+          </p>
         </header>
 
-        <section className={styles.card} aria-live="polite">
-          {loading ? (
-            <p className={styles.meta}>Loading gate status...</p>
-          ) : errorMessage ? (
-            <p className={styles.error}>{errorMessage}</p>
-          ) : (
-            <>
-              <p className={`${styles.statusText} ${statusClassName}`}>{status}</p>
-              <p className={styles.meta}>
-                measured_value: {measuredValue == null ? '-' : measuredValue}
-              </p>
-              <p className={styles.meta}>
-                threshold: {threshold == null ? '-' : threshold}
-              </p>
-              {reasonCode ? <p className={styles.reason}>reason_code: {reasonCode}</p> : null}
-            </>
-          )}
-        </section>
-
         <section className={styles.actions}>
-          <section className={styles.jobCard} aria-label="Job status">
-            <p className={styles.jobTitle}>Job Status</p>
-            {jobStatusLoading ? (
-              <p className={styles.metaHint}>Loading…</p>
-            ) : jobStatusError ? (
-              <p className={styles.referenceError} role="alert">
-                {jobStatusError}
+          <div className={styles.workflowStep}>
+            <section className={styles.referenceCard} aria-label="Step 1 source">
+              <p className={styles.referenceTitle}>Step 1. Source</p>
+              <input
+                type="text"
+                value={referenceAssetKey}
+                onChange={(e) => setReferenceAssetKey(e.target.value)}
+                className={styles.referenceInput}
+                placeholder="Storage path or asset key"
+                aria-label="Reference asset key"
+                disabled={registeringRef}
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                className={styles.referenceButton}
+                disabled={registeringRef}
+                onClick={handleRegisterReferenceAsset}
+              >
+                {registeringRef ? 'Saving…' : 'Save source'}
+              </button>
+              {referenceError ? (
+                <p className={styles.referenceError} role="alert">
+                  {referenceError}
+                </p>
+              ) : null}
+            </section>
+
+            <button
+              type="button"
+              className={styles.actionButton}
+              style={buttonStyle}
+              disabled={actionDisabled}
+              onClick={handleActionClick}
+            >
+              {actionButtonText}
+            </button>
+            {availabilityHint ? (
+              <p className={styles.metaHint}>
+                {availabilityHint}
               </p>
-            ) : !jobStatus.job ? (
-              <p className={styles.metaHint}>No job yet</p>
-            ) : (
-              <div className={styles.jobGrid}>
-                <div className={styles.jobRow}>
-                  <span className={styles.jobKey}>job_type</span>
-                  <span className={styles.jobValue}>{jobStatus.job.job_type}</span>
-                </div>
-                <div className={styles.jobRow}>
-                  <span className={styles.jobKey}>status</span>
-                  <span className={styles.jobValue}>{jobStatus.job.status}</span>
-                </div>
-                <div className={styles.jobRow}>
-                  <span className={styles.jobKey}>progress</span>
-                  <span className={styles.jobValue}>
-                    {jobStatus.job.progress == null ? '-' : jobStatus.job.progress}
-                  </span>
-                </div>
-                <div className={styles.jobRow}>
-                  <span className={styles.jobKey}>latest_event</span>
-                  <span className={styles.jobValue}>
-                    {jobStatus.latest_event?.message ?? '-'}
-                  </span>
-                </div>
-                {jobStatus.job.error_code ? (
-                  <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>error_code</span>
-                    <span className={styles.jobValue}>{jobStatus.job.error_code}</span>
-                  </div>
-                ) : null}
-                {jobStatus.job.error_message ? (
-                  <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>error_message</span>
-                    <span className={styles.jobValue}>{jobStatus.job.error_message}</span>
-                  </div>
-                ) : null}
-                {stopButtonVisible ? (
-                  <div className={styles.jobActions}>
+            ) : null}
+            {contextLoadError && !errorMessage ? (
+              <p className={styles.metaHint}>
+                {contextLoadError}
+              </p>
+            ) : null}
+            {actionMessage ? (
+              <p className={styles.metaHint}>
+                {actionMessage}
+              </p>
+            ) : null}
+          </div>
+
+          <div className={styles.workflowStep}>
+            <section className={styles.promptCard} aria-label="Step 2 prompt">
+              <button
+                type="button"
+                className={styles.promptToggle}
+                aria-expanded={promptAccordionOpen}
+                onClick={() => setPromptAccordionOpen((open) => !open)}
+              >
+                Step 2. Prompt
+              </button>
+              {promptAccordionOpen ? (
+                <>
+                  <p className={styles.promptNotImplementedHint}>
+                    Preview placeholder completed. Real rendering is not connected yet.
+                  </p>
+                  <textarea
+                    className={styles.promptTextarea}
+                    value={previewInstruction}
+                    onChange={(e) => setPreviewInstruction(e.target.value)}
+                    placeholder="Describe what you want to preview…"
+                    aria-label="Preview instruction"
+                    rows={5}
+                    disabled={previewSubmitting}
+                    spellCheck={true}
+                  />
+                  <div className={styles.stepGenerateBlock}>
+                    <p className={styles.stepGenerateLabel}>Step 3. Generate / Preview</p>
                     <button
                       type="button"
-                      className={styles.stopButton}
-                      disabled={stoppingJob}
-                      onClick={handleStopJob}
+                      className={styles.promptRunButton}
+                      disabled={previewSubmitting}
+                      onClick={handleRunPreview}
                     >
-                      {stoppingJob ? 'Stopping...' : 'Stop'}
+                      {previewSubmitting ? 'Running…' : 'Run Preview'}
                     </button>
                   </div>
-                ) : null}
-                {stopJobError ? (
-                  <p className={styles.referenceError} role="alert">
-                    {stopJobError}
-                  </p>
-                ) : null}
-              </div>
-            )}
-          </section>
+                  {previewValidationError ? (
+                    <p className={styles.referenceError} role="alert">
+                      {previewValidationError}
+                    </p>
+                  ) : null}
+                  {previewSubmitError ? (
+                    <p className={styles.referenceError} role="alert">
+                      {previewSubmitError}
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+            </section>
+          </div>
+
+          <div className={styles.workflowStep}>
+            <section className={styles.jobCard} aria-label="Step 4 progress">
+              <p className={styles.jobTitle}>Step 4. Progress</p>
+              {jobStatusLoading ? (
+                <p className={styles.metaHint}>Loading…</p>
+              ) : jobStatusError ? (
+                <p className={styles.referenceError} role="alert">
+                  {jobStatusError}
+                </p>
+              ) : !jobStatus.job ? (
+                <p className={styles.metaHint}>No job yet</p>
+              ) : (
+                <div className={styles.jobGrid}>
+                  <div className={styles.jobRow}>
+                    <span className={styles.jobKey}>Task type</span>
+                    <span className={styles.jobValue}>{jobStatus.job.job_type}</span>
+                  </div>
+                  <div className={styles.jobRow}>
+                    <span className={styles.jobKey}>Status</span>
+                    <span className={styles.jobValue}>{jobStatus.job.status}</span>
+                  </div>
+                  <div className={styles.jobRow}>
+                    <span className={styles.jobKey}>Progress</span>
+                    <span className={styles.jobValue}>
+                      {jobStatus.job.progress == null ? '-' : jobStatus.job.progress}
+                    </span>
+                  </div>
+                  <div className={styles.jobRow}>
+                    <span className={styles.jobKey}>Latest update</span>
+                    <span className={styles.jobValue}>
+                      {jobStatus.latest_event?.message ?? '-'}
+                    </span>
+                  </div>
+                  {jobStatus.job.error_code ? (
+                    <div className={styles.jobRow}>
+                      <span className={styles.jobKey}>Error code</span>
+                      <span className={styles.jobValue}>{jobStatus.job.error_code}</span>
+                    </div>
+                  ) : null}
+                  {jobStatus.job.error_message ? (
+                    <div className={styles.jobRow}>
+                      <span className={styles.jobKey}>Message</span>
+                      <span className={styles.jobValue}>{jobStatus.job.error_message}</span>
+                    </div>
+                  ) : null}
+                  {stopButtonVisible ? (
+                    <div className={styles.jobActions}>
+                      <button
+                        type="button"
+                        className={styles.stopButton}
+                        disabled={stoppingJob}
+                        onClick={handleStopJob}
+                      >
+                        {stoppingJob ? 'Stopping...' : 'Stop'}
+                      </button>
+                    </div>
+                  ) : null}
+                  {stopJobError ? (
+                    <p className={styles.referenceError} role="alert">
+                      {stopJobError}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+            </section>
+          </div>
 
           {previewResultAssetKey ? (
-            <section className={styles.jobCard} aria-label="Preview result">
-              <p className={styles.jobTitle}>Preview Result</p>
-              <div className={styles.previewViewerBlock}>
-                <p className={styles.previewViewerTitle}>Preview Viewer</p>
-                <div
-                  className={styles.previewViewerFrame}
-                  aria-hidden="true"
-                >
-                  <p className={styles.previewViewerPlaceholderLabel}>
-                    Preview placeholder
-                  </p>
+            <div className={styles.workflowStep}>
+              <section className={styles.jobCard} aria-label="Step 5 result">
+                <p className={styles.jobTitle}>Step 5. Result</p>
+                <div className={styles.previewViewerBlock}>
+                  <p className={styles.previewViewerTitle}>Preview Viewer</p>
+                  <div
+                    className={styles.previewViewerFrame}
+                    aria-hidden="true"
+                  >
+                    <p className={styles.previewViewerPlaceholderLabel}>
+                      Preview placeholder
+                    </p>
+                  </div>
+                  <p className={styles.previewViewerKey}>{previewResultAssetKey}</p>
                 </div>
-                <p className={styles.previewViewerKey}>{previewResultAssetKey}</p>
-              </div>
-              <p
-                className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
-              >
-                This is a placeholder preview. Real rendering is not connected yet.
-              </p>
-            </section>
-          ) : null}
-
-          <section className={styles.promptCard} aria-label="Prompt">
-            <button
-              type="button"
-              className={styles.promptToggle}
-              aria-expanded={promptAccordionOpen}
-              onClick={() => setPromptAccordionOpen((open) => !open)}
-            >
-              Prompt
-            </button>
-            {promptAccordionOpen ? (
-              <>
-                <p className={styles.promptNotImplementedHint}>
-                  Preview placeholder completed. Real rendering is not connected yet.
-                </p>
-                <textarea
-                  className={styles.promptTextarea}
-                  value={previewInstruction}
-                  onChange={(e) => setPreviewInstruction(e.target.value)}
-                  placeholder="Describe what you want to preview…"
-                  aria-label="Preview instruction"
-                  rows={5}
-                  disabled={previewSubmitting}
-                  spellCheck={true}
-                />
-                <button
-                  type="button"
-                  className={styles.promptRunButton}
-                  disabled={previewSubmitting}
-                  onClick={handleRunPreview}
+                <p
+                  className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
                 >
-                  {previewSubmitting ? 'Running…' : 'Run Preview'}
-                </button>
-                {previewValidationError ? (
-                  <p className={styles.referenceError} role="alert">
-                    {previewValidationError}
-                  </p>
-                ) : null}
-                {previewSubmitError ? (
-                  <p className={styles.referenceError} role="alert">
-                    {previewSubmitError}
-                  </p>
-                ) : null}
-              </>
-            ) : null}
-          </section>
+                  This is a placeholder preview. Real rendering is not connected yet.
+                </p>
+              </section>
+            </div>
+          ) : null}
 
-          <section className={styles.referenceCard} aria-label="Register reference asset">
-            <p className={styles.referenceTitle}>Reference asset</p>
-            <input
-              type="text"
-              value={referenceAssetKey}
-              onChange={(e) => setReferenceAssetKey(e.target.value)}
-              className={styles.referenceInput}
-              placeholder="asset_key (e.g. storage/path.ext)"
-              aria-label="Reference asset key"
-              disabled={registeringRef}
-              spellCheck={false}
-            />
-            <button
-              type="button"
-              className={styles.referenceButton}
-              disabled={registeringRef}
-              onClick={handleRegisterReferenceAsset}
-            >
-              {registeringRef ? 'Registering…' : 'Register Reference Asset'}
-            </button>
-            {referenceError ? (
-              <p className={styles.referenceError} role="alert">
-                {referenceError}
-              </p>
-            ) : null}
+          <section className={styles.advancedSection} aria-label="Advanced status">
+            <p className={styles.advancedSectionTitle}>Advanced Status</p>
+            <p className={styles.advancedSectionHint}>
+              Project ID and technical readiness details.
+            </p>
+            <p className={styles.label}>Project ID</p>
+            <p className={styles.projectId}>{projectId || 'Unknown Project'}</p>
+            <section className={styles.card} aria-live="polite">
+              {loading ? (
+                <p className={styles.meta}>Loading detailed status…</p>
+              ) : errorMessage ? (
+                <p className={styles.error}>{errorMessage}</p>
+              ) : (
+                <>
+                  <p className={`${styles.statusText} ${statusClassName}`}>{status}</p>
+                  <p className={styles.meta}>
+                    measured_value: {measuredValue == null ? '-' : measuredValue}
+                  </p>
+                  <p className={styles.meta}>
+                    threshold: {threshold == null ? '-' : threshold}
+                  </p>
+                  {reasonCode ? <p className={styles.reason}>reason_code: {reasonCode}</p> : null}
+                </>
+              )}
+            </section>
           </section>
-
-          <button
-            type="button"
-            className={styles.actionButton}
-            style={buttonStyle}
-            disabled={actionDisabled}
-            onClick={handleActionClick}
-          >
-            {actionButtonText}
-          </button>
-          {availabilityHint ? (
-            <p className={styles.metaHint}>
-              {availabilityHint}
-            </p>
-          ) : null}
-          {contextLoadError && !errorMessage ? (
-            <p className={styles.metaHint}>
-              {contextLoadError}
-            </p>
-          ) : null}
-          {actionMessage ? (
-            <p className={styles.metaHint}>
-              {actionMessage}
-            </p>
-          ) : null}
         </section>
       </div>
     </main>

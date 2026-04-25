@@ -46,6 +46,77 @@
   color: #111827;
 }
 
+.headerSubtitle {
+  margin: 0;
+  max-width: 520px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: #6b7280;
+  text-align: center;
+}
+
+.workflowStep {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.stepGenerateBlock {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  margin-top: 4px;
+  border-top: 1px solid #e5e7eb;
+}
+
+.stepGenerateLabel {
+  margin: 0;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.3;
+  color: #6b7280;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.advancedSection {
+  width: 100%;
+  max-width: 560px;
+  margin-top: 6px;
+  padding-top: 16px;
+  border-top: 1px solid #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.advancedSectionTitle {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: #6b7280;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: center;
+}
+
+.advancedSectionHint {
+  margin: 0 0 4px;
+  max-width: 520px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9ca3af;
+  text-align: center;
+}
+
 .card {
   border: 1px solid #d1d1d1;
   border-radius: 14px;
@@ -410,7 +481,7 @@
   flex-direction: column;
   align-items: center;
   width: 100%;
-  gap: 8px;
+  gap: 14px;
 }
 
 .actionButton {
@@ -458,5 +529,10 @@
 
   .jobCard {
     padding: 20px;
+  }
+
+  .advancedSection {
+    padding-top: 20px;
+    margin-top: 8px;
   }
 }
