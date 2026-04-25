@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAuthServerClient } from '@/lib/supabase/auth-server'
-import { supabaseAdmin } from '@/lib/supabase/admin'
+import {
+  insertSourceAssetForOwner,
+  isValidProjectUuid,
+} from '@/lib/server/insert-source-asset'
 
 const ALLOWED_ASSET_TYPE = ['source', 'reference', 'audio', 'bg']
 const ALLOWED_ASSET_STATUS = ['uploaded', 'validated', 'active', 'failed', 'expired']
-
-function isValidProjectUuid(projectId: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
-    projectId
-  )
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -63,68 +60,30 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const { data: projectRow, error: projectError } = await supabaseAdmin
-      .from('projects')
-      .select('id')
-      .eq('id', project_id)
-      .eq('owner_user_id', user.id)
-      .maybeSingle()
+    const insertResult = await insertSourceAssetForOwner({
+      ownerUserId: user.id,
+      project_id,
+      asset_type,
+      asset_key,
+      asset_status,
+    })
 
-    if (projectError) {
+    if (!insertResult.ok) {
       return NextResponse.json(
-        { ok: false, error: projectError.message },
-        { status: 500 }
-      )
-    }
-
-    if (!projectRow) {
-      return NextResponse.json(
-        { ok: false, error: 'PROJECT_NOT_FOUND' },
-        { status: 404 }
-      )
-    }
-
-    const { data, error } = await supabaseAdmin
-      .from('source_assets')
-      .insert({
-        project_id,
-        asset_type,
-        asset_key,
-        asset_status,
-      })
-      .select('id, project_id, asset_type, asset_key, asset_status, created_at')
-      .single()
-
-    if (error) {
-      if (error.message.includes('duplicate key')) {
-        return NextResponse.json(
-          { ok: false, error: 'ASSET_ALREADY_EXISTS' },
-          { status: 409 }
-        )
-      }
-
-      return NextResponse.json(
-        { ok: false, error: error.message },
-        { status: 500 }
-      )
-    }
-
-    if (!data) {
-      return NextResponse.json(
-        { ok: false, error: 'SOURCE_ASSET_CREATE_NO_DATA' },
-        { status: 500 }
+        { ok: false, error: insertResult.error },
+        { status: insertResult.status }
       )
     }
 
     return NextResponse.json({
       ok: true,
       data: {
-        source_asset_id: data.id,
-        project_id: data.project_id,
-        asset_type: data.asset_type,
-        asset_key: data.asset_key,
-        asset_status: data.asset_status,
-        created_at: data.created_at,
+        source_asset_id: insertResult.data.id,
+        project_id: insertResult.data.project_id,
+        asset_type: insertResult.data.asset_type,
+        asset_key: insertResult.data.asset_key,
+        asset_status: insertResult.data.asset_status,
+        created_at: insertResult.data.created_at,
       },
     })
   } catch (error) {
