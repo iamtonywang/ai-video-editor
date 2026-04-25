@@ -438,33 +438,70 @@
 }
 
 .sourceUploadBlock {
+  position: relative;
   width: 100%;
   max-width: 560px;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 10px;
   padding-top: 12px;
   margin-top: 6px;
   border-top: 1px solid #e5e7eb;
 }
 
-.sourceFileInput {
-  width: 100%;
-  max-width: 560px;
-  font-size: 13px;
-  line-height: 1.35;
-  color: #374151;
+.sourceFileInputHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.sourceFileInput:disabled {
+.sourceChooseFileButton {
+  width: 100%;
+  max-width: 560px;
+  align-self: center;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  background: transparent;
+  color: #111827;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.sourceChooseFileButton:hover {
+  border-color: #b8b8b8;
+  background: rgba(235, 235, 235, 0.45);
+}
+
+.sourceChooseFileButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.sourceFileNameLine {
+  margin: 0;
+  width: 100%;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #6b7280;
+  text-align: center;
+  word-break: break-word;
 }
 
 .sourceUploadButton {
   width: 100%;
   max-width: 560px;
+  align-self: center;
   border: 1px solid #d1d1d1;
   border-radius: 14px;
   background: transparent;

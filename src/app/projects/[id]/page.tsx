@@ -81,6 +81,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   >(null)
   const [uploadReferenceError, setUploadReferenceError] = useState<string | null>(null)
   const [uploadReferenceAssetKey, setUploadReferenceAssetKey] = useState<string | null>(null)
+  const [referenceChosenFileLabel, setReferenceChosenFileLabel] = useState('')
 
   const [jobStatusLoading, setJobStatusLoading] = useState(false)
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
@@ -628,14 +629,31 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   ref={referenceFileInputRef}
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
-                  className={styles.sourceFileInput}
+                  className={styles.sourceFileInputHidden}
                   disabled={uploadReferenceSubmitting || registeringRef}
+                  tabIndex={-1}
                   aria-label="Reference image file"
                   onChange={() => {
                     setUploadReferenceValidationError(null)
                     setUploadReferenceError(null)
+                    const inputEl = referenceFileInputRef.current
+                    const f = inputEl?.files?.[0]
+                    setReferenceChosenFileLabel(f?.name ?? '')
                   }}
                 />
+                <button
+                  type="button"
+                  className={styles.sourceChooseFileButton}
+                  disabled={uploadReferenceSubmitting || registeringRef}
+                  onClick={() => referenceFileInputRef.current?.click()}
+                >
+                  Choose Reference File
+                </button>
+                <p className={styles.sourceFileNameLine} aria-live="polite">
+                  {referenceChosenFileLabel.trim()
+                    ? referenceChosenFileLabel
+                    : 'No file selected'}
+                </p>
                 <button
                   type="button"
                   className={styles.sourceUploadButton}
