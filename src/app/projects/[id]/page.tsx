@@ -657,6 +657,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   Link / Platform
                 </button>
               </div>
+              {inputType === 'ai' ? (
+                <p className={styles.inputTypeHint}>Write a prompt to generate a preview.</p>
+              ) : null}
             </section>
 
             {inputType === 'upload' ? (
@@ -829,29 +832,33 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
               </section>
             ) : null}
 
-            <button
-              type="button"
-              className={styles.actionButton}
-              style={buttonStyle}
-              disabled={actionDisabled}
-              onClick={handleActionClick}
-            >
-              {actionButtonText}
-            </button>
-            {availabilityHint ? (
-              <p className={styles.metaHint}>
-                {availabilityHint}
-              </p>
-            ) : null}
-            {contextLoadError && !errorMessage ? (
-              <p className={styles.metaHint}>
-                {contextLoadError}
-              </p>
-            ) : null}
-            {actionMessage ? (
-              <p className={styles.metaHint}>
-                {actionMessage}
-              </p>
+            {inputType === 'upload' ? (
+              <>
+                <button
+                  type="button"
+                  className={styles.actionButton}
+                  style={buttonStyle}
+                  disabled={actionDisabled}
+                  onClick={handleActionClick}
+                >
+                  {actionButtonText}
+                </button>
+                {availabilityHint ? (
+                  <p className={styles.metaHint}>
+                    {availabilityHint}
+                  </p>
+                ) : null}
+                {contextLoadError && !errorMessage ? (
+                  <p className={styles.metaHint}>
+                    {contextLoadError}
+                  </p>
+                ) : null}
+                {actionMessage ? (
+                  <p className={styles.metaHint}>
+                    {actionMessage}
+                  </p>
+                ) : null}
+              </>
             ) : null}
           </div>
 
