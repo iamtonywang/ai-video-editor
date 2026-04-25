@@ -335,18 +335,52 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   }, [jobStatus.job])
 
   const shouldShowPreviewResult = useMemo(() => {
-    const job = jobStatus.job
-    return !!job && job.job_type === 'preview' && job.status === 'success'
-  }, [jobStatus.job?.job_type, jobStatus.job?.status])
+    return previewResultAssetKey !== null
+  }, [previewResultAssetKey])
 
   const previewImageUrl = useMemo(() => {
     const u = jobStatus.job?.preview_url?.trim()
     return u ? u : null
   }, [jobStatus.job?.preview_url])
 
+  const [deletingPreviewResult, setDeletingPreviewResult] = useState(false)
+  const [deletePreviewResultError, setDeletePreviewResultError] = useState<string | null>(null)
+
   useEffect(() => {
     setPreviewImageFailed(false)
   }, [previewResultAssetKey])
+
+  async function handleDeletePreviewResult() {
+    if (!projectId) return
+    const jobId = jobStatus.job?.id ?? ''
+    if (!jobId) return
+
+    setDeletePreviewResultError(null)
+
+    if (!confirm('결과를 삭제할까요?')) return
+
+    setDeletingPreviewResult(true)
+    try {
+      const response = await fetch(
+        `/api/projects/${projectId}/jobs/${jobId}/preview-result`,
+        { method: 'DELETE' }
+      )
+      const body = (await response.json()) as
+        | { ok: true; data: { job_id: string; deleted_asset_key: string | null } }
+        | { ok: false; error: string; error_detail?: string }
+
+      if (!response.ok || !body.ok) {
+        setDeletePreviewResultError(body.ok ? FALLBACK_ERROR_MESSAGE : body.error)
+        return
+      }
+
+      await refreshJobStatus(projectId)
+    } catch {
+      setDeletePreviewResultError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setDeletingPreviewResult(false)
+    }
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -974,6 +1008,21 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     )}
                   </div>
                   <p className={styles.previewViewerKey}>{previewResultAssetKey ?? '-'}</p>
+                  <div className={styles.previewResultActions}>
+                    <button
+                      type="button"
+                      className={styles.previewResultDeleteButton}
+                      disabled={deletingPreviewResult}
+                      onClick={handleDeletePreviewResult}
+                    >
+                      {deletingPreviewResult ? '삭제 중…' : '결과 삭제'}
+                    </button>
+                  </div>
+                  {deletePreviewResultError ? (
+                    <p className={styles.referenceError} role="alert">
+                      {deletePreviewResultError}
+                    </p>
+                  ) : null}
                 </div>
                 {!previewImageUrl || previewImageFailed ? (
                   <p
