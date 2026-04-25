@@ -1,7 +1,13 @@
-# Supabase Storage — reference assets (phase 1)
+# Supabase Storage — `project-media` conventions
 
-This document fixes **bucket name**, **object path layout**, and how values map to **`source_assets`** via `POST /api/source/register`.  
-**No upload implementation lives in the repo yet**; this is the contract for when it is added.
+This document defines object layouts under bucket **`project-media`** for:
+
+- **Reference** — user/editor **input** material (registered in **`source_assets`**).
+- **Preview** — **generated image** output from a preview job (path stored on **`jobs.output_asset_key`**).
+
+Implementations must follow these paths. **The real preview image generation engine is not connected yet**; the worker still ends preview jobs with a **placeholder** `output_asset_key`. When generation is implemented, outputs should **conform to the preview rules below** (replacing the placeholder).
+
+---
 
 ## Bucket (dashboard setup)
 
@@ -9,16 +15,17 @@ This document fixes **bucket name**, **object path layout**, and how values map 
 |--------|--------|
 | **Bucket name** | `project-media` |
 
-Create the **`project-media`** bucket in the Supabase project dashboard (Storage). Policies/RLS are not defined in this repo—configure them when implementing upload.
+Create the **`project-media`** bucket in the Supabase project dashboard (Storage). Policies/RLS are not defined in this repo—configure them when implementing upload or worker-side writes.
 
-## Phase 1 upload target
+---
 
-- **Asset role in Storage**: reference material for identity / gate flows.
-- **`source_assets.asset_type`** when registering: **`reference`** (only this type for phase 1 uploads).
+## Reference assets (phase 1) — **input material**
 
-## Object path rule
+**Role:** Reference images (or other inputs) supplied for identity / gate flows — **not** model-generated previews.
 
-Objects are stored **under** bucket `project-media` with this path pattern:
+**Registration:** After upload, `POST /api/source/register` with `asset_type: reference` and `asset_status: validated` (see below).
+
+### Object path rule
 
 ```text
 projects/{projectId}/references/{uuid}.{ext}
@@ -26,49 +33,88 @@ projects/{projectId}/references/{uuid}.{ext}
 
 Where:
 
-- **`{projectId}`** — Project UUID (same as `projects.id` / URL segment).
-- **`{uuid}`** — A new UUID (e.g. `crypto.randomUUID()`). **Do not use the original filename in the path**; the basename is UUID-based to avoid collisions, unsafe characters, and overlong paths.
-- **`{ext}`** — Normalized extension only (e.g. `png`, `jpg`, `webp`), derived from MIME or a safe allowlist—not the raw client filename string.
+- **`{projectId}`** — Project UUID (`projects.id`).
+- **`{uuid}`** — A stable, collision-safe id for the object basename (implementation may use a short id such as `ref_` + hex; **do not** embed the raw original client filename in the path).
+- **`{ext}`** — Normalized extension (`png`, `jpg`, `webp`, …) from MIME or an allowlist.
 
-**Example object key inside the bucket:**
+**Example object key (inside the bucket, no bucket prefix):**
 
 ```text
-projects/a1b2c3d4-e5f6-7890-abcd-ef1234567890/references/f47ac10b-58cc-4372-a567-0e02b2c3d479.png
+projects/a1b2c3d4-e5f6-7890-abcd-ef1234567890/references/ref_a1b2c3d4.png
 ```
 
-## `asset_key` for `POST /api/source/register`
+### `asset_key` for `POST /api/source/register`
 
-Store **`asset_key` as the object path only** — **without** bucket name or leading slash:
+Store **`asset_key` as the object path only** — **without** the bucket name or a leading slash:
 
-- **Correct:** `projects/{projectId}/references/{uuid}.png`
-- **Incorrect:** `project-media/projects/...` (bucket must not be part of `asset_key`)
-- **Incorrect:** `/projects/...` (no leading slash)
+- **Correct:** `projects/{projectId}/references/….png`
+- **Incorrect:** `project-media/projects/…`
+- **Incorrect:** `/projects/…`
 
-Example for `POST /api/source/register` JSON body:
-
-```json
-{
-  "project_id": "<uuid>",
-  "asset_type": "reference",
-  "asset_key": "projects/a1b2c3d4-e5f6-7890-abcd-ef1234567890/references/f47ac10b-58cc-4372-a567-0e02b2c3d479.png",
-  "asset_status": "validated"
-}
-```
-
-## After upload — registration rule
-
-After a successful Storage upload to `project-media` at the path above, call **`/api/source/register`** with:
+### After upload — registration rule
 
 | Field | Value |
 |--------|--------|
 | `asset_type` | `reference` |
 | `asset_status` | `validated` |
 
-This matches the current UI and keeps **`execution-context`** / **`identity/build`** queries satisfied (they require `asset_status` in `validated` / `active` or `validation_status` validated — **`uploaded` alone does not pass**).
+`execution-context` / `identity/build` expect validated/active reference rows; **`uploaded` alone is not enough**.
 
-## Caveats (read before implementing upload)
+---
 
-1. **`uploaded` only** — Current **`execution-context`** and **`identity/build`** logic **do not** treat `asset_status = uploaded` as sufficient. Do not register with only `uploaded` unless those APIs are changed later.
-2. **`validated` as interim** — Until a real validation pipeline exists, **`validated` is used pragmatically** after upload succeeds (integrity/MIME checks can be added later without changing the path contract).
-3. **Bucket creation** — The **`project-media`** bucket is **not** created by application code; it must exist in Supabase before uploads work.
-4. **Code** — This document does not change runtime behavior; implementors must align upload + register with these rules.
+## Preview job outputs (phase 1) — **generated image**
+
+**Role:** **Output** of a **`preview`** job — **generated result**, not user reference uploads.
+
+**Constraints (phase 1):**
+
+- **Medium:** **image only** (no video preview in this phase).
+- **Allowed file extensions:** **`png`**, **`webp`**, **`jpg`** (choose one per object; match MIME when writing).
+
+### Object path rule
+
+All preview image objects for a job live under:
+
+```text
+projects/{projectId}/previews/{jobId}/preview.{ext}
+```
+
+Where:
+
+- **`{projectId}`** — Project UUID.
+- **`{jobId}`** — The **`jobs.id`** UUID for this preview job (one folder per job).
+- **`preview.{ext}`** — Literal basename **`preview`** plus extension **`png`**, **`webp`**, or **`jpg`**.
+
+**Example object key (no bucket prefix):**
+
+```text
+projects/a1b2c3d4-e5f6-7890-abcd-ef1234567890/previews/f47ac10b-58cc-4372-a567-0e02b2c3d479/preview.webp
+```
+
+### `jobs.output_asset_key`
+
+When a preview completes and a file exists in Storage, set **`jobs.output_asset_key`** to the **same string as the object path inside `project-media`** — **do not** include the bucket name or a leading slash:
+
+- **Correct:** `projects/{projectId}/previews/{jobId}/preview.webp`
+- **Incorrect:** `project-media/projects/…`
+
+---
+
+## Reference vs preview (summary)
+
+| | **Reference** | **Preview** |
+|---|----------------|-------------|
+| **Meaning** | **Input** material the user/editor provides | **Generated result** of a preview job |
+| **Typical flow** | Upload → `source_assets` via `/api/source/register` | Worker (or pipeline) writes image → update `jobs.output_asset_key` |
+| **Path prefix** | `projects/{projectId}/references/…` | `projects/{projectId}/previews/{jobId}/…` |
+| **Primary DB link** | `source_assets.asset_key` | `jobs.output_asset_key` |
+
+Do **not** store preview outputs under `references/` or register them as `reference` rows unless they are truly reference inputs.
+
+---
+
+## Caveats (read before implementing)
+
+1. **Reference `uploaded` status** — `execution-context` / `identity/build` do not treat `asset_status = uploaded` alone as sufficient; use **`validated`** until a real validation pipeline exists.
+2. **Bucket** — **`project-media`** must exist in the Supabase dashboard; app code does not create it.
+3. **Preview engine** — **Not connected** today; placeholder `output_asset_key` will be **replaced by paths matching this preview section** when generation is implemented.

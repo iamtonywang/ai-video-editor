@@ -40,19 +40,18 @@ npm run dev:all
 
 If the worker is not running, jobs will remain in **`queued`** and the Job Status panel may not advance (`queued → running → success/failed`), and `latest_event` may stay empty.
 
-## Supabase Storage (reference uploads — phase 1)
+## Supabase Storage (`project-media`)
 
-Upload UI/API is not implemented yet. The following is **fixed by documentation** for the first implementation:
+**Full spec:** **[docs/storage-conventions.md](./docs/storage-conventions.md)** (reference **input** paths, preview **output** paths, and `jobs.output_asset_key`).
 
 | Topic | Convention |
 |--------|------------|
 | **Bucket** | `project-media` (create in Supabase dashboard) |
-| **Phase 1 asset** | `reference` only |
-| **Object path** | `projects/{projectId}/references/{uuid}.{ext}` (UUID basename — **not** the original filename) |
-| **`asset_key` in `/api/source/register`** | Same path **without** bucket prefix, e.g. `projects/{projectId}/references/{uuid}.png` |
-| **After upload** | `asset_type: reference`, `asset_status: validated` |
+| **Reference (input)** | `projects/{projectId}/references/…` → `source_assets.asset_key` (via `/api/source/register`) |
+| **Preview (image output)** | `projects/{projectId}/previews/{jobId}/preview.{ext}` with `ext` ∈ `png`, `webp`, `jpg` → **`jobs.output_asset_key`** (no bucket prefix) |
+| **After reference upload** | `asset_type: reference`, `asset_status: validated` |
 
-**Important:** `asset_status: uploaded` does **not** satisfy current `identity` / execution-context checks; use `validated` until a real validation pipeline exists. See **[docs/storage-conventions.md](./docs/storage-conventions.md)** for the full spec and caveats.
+**Important:** `asset_status: uploaded` does **not** satisfy current `identity` / execution-context checks; use `validated` until a real validation pipeline exists. Preview generation is **not** wired yet; the doc defines the **target** layout before placeholder is replaced.
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
