@@ -662,30 +662,13 @@
   word-break: break-word;
 }
 
-.sourceUploadButton {
+.sourceUploadStatus {
+  margin: 0;
   width: 100%;
-  max-width: 560px;
-  align-self: center;
-  border: 1px solid #d1d1d1;
-  border-radius: 14px;
-  background: transparent;
-  color: #111827;
-  padding: 12px 14px;
-  font-size: 15px;
-  line-height: 1.2;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
-}
-
-.sourceUploadButton:hover {
-  border-color: #b8b8b8;
-  background: rgba(235, 235, 235, 0.45);
-}
-
-.sourceUploadButton:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #6b7280;
+  text-align: center;
 }
 
 .sourceUploadSuccess {

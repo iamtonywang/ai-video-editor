@@ -719,6 +719,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       const inputEl = referenceFileInputRef.current
                       const f = inputEl?.files?.[0]
                       setReferenceChosenFileLabel(f?.name ?? '')
+                      if (f) {
+                        void handleUploadReferenceFile()
+                      }
                     }}
                   />
                   <button
@@ -734,14 +737,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       ? referenceChosenFileLabel
                       : '선택된 파일 없음'}
                   </p>
-                  <button
-                    type="button"
-                    className={styles.sourceUploadButton}
-                    disabled={uploadReferenceSubmitting || registeringRef}
-                    onClick={handleUploadReferenceFile}
-                  >
-                    {uploadReferenceSubmitting ? '업로드 중…' : '업로드'}
-                  </button>
+                  {uploadReferenceSubmitting ? (
+                    <p className={styles.sourceUploadStatus} aria-live="polite">
+                      업로드 중…
+                    </p>
+                  ) : null}
                 </div>
 
                 {false ? (
