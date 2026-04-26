@@ -99,6 +99,153 @@ async function updateAnalyzeJobStatus(params: {
   assertDbResult(`jobs_${params.status}_update_failed`, result)
 }
 
+type JobCostSnapshot = {
+  id: string
+  status: string | null
+  cost_estimate: number
+  cost_accumulated: number
+  cost_actual: number
+  soft_cost_limit: number
+  hard_cost_limit: number
+  kill_signal: unknown
+}
+
+function parseJobNumericField(jobId: string, field: string, value: unknown): number {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n)) {
+    console.warn('[COST_NUMERIC_INVALID]', { jobId, field, value })
+    return 0
+  }
+  return n
+}
+
+async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot> {
+  const result = await supabaseServer
+    .from('jobs')
+    .select(
+      'id, status, cost_estimate, cost_accumulated, cost_actual, soft_cost_limit, hard_cost_limit, kill_signal'
+    )
+    .eq('id', jobId)
+    .maybeSingle()
+
+  if (result.error) {
+    throw new Error(`readJobCostSnapshot_failed: ${result.error.message}`)
+  }
+  const row = result.data
+  if (!row?.id) {
+    throw new Error(`JOB_NOT_FOUND_FOR_COST: ${jobId}`)
+  }
+
+  const cost_estimate = parseJobNumericField(jobId, 'cost_estimate', row.cost_estimate)
+  if (cost_estimate <= 0) {
+    console.warn('[COST_INVALID_ESTIMATE]', { jobId, cost_estimate, raw: row.cost_estimate })
+  }
+
+  return {
+    id: row.id,
+    status: row.status ?? null,
+    cost_estimate,
+    cost_accumulated: parseJobNumericField(jobId, 'cost_accumulated', row.cost_accumulated),
+    cost_actual: parseJobNumericField(jobId, 'cost_actual', row.cost_actual),
+    soft_cost_limit: parseJobNumericField(jobId, 'soft_cost_limit', row.soft_cost_limit),
+    hard_cost_limit: parseJobNumericField(jobId, 'hard_cost_limit', row.hard_cost_limit),
+    kill_signal: row.kill_signal,
+  }
+}
+
+async function markCostRunning(jobId: string): Promise<void> {
+  const snap = await readJobCostSnapshot(jobId)
+  const st = snap.status
+
+  if (st === 'success' || st === 'failed' || st === 'canceled') {
+    console.log('[COST_RUNNING]', 'skip_terminal_status', { jobId, status: st })
+    return
+  }
+
+  if (st !== 'running') {
+    console.warn('[COST_RUNNING]', 'skip_not_running', { jobId, status: st })
+    return
+  }
+
+  const runningAccumulated = snap.cost_estimate * 0.5
+
+  const update = await supabaseServer
+    .from('jobs')
+    .update({ cost_accumulated: runningAccumulated })
+    .eq('id', jobId)
+    .eq('status', 'running')
+    .select('id')
+    .maybeSingle()
+
+  if (update.error) {
+    console.error('[COST_UPDATE_FAILED]', 'markCostRunning', jobId, update.error.message)
+    return
+  }
+  if (!update.data) {
+    console.log('[COST_RUNNING]', 'no_matching_row', { jobId })
+    return
+  }
+  console.log('[COST_RUNNING]', 'ok', { jobId, cost_accumulated: runningAccumulated })
+}
+
+async function markCostSuccess(jobId: string): Promise<void> {
+  const snap = await readJobCostSnapshot(jobId)
+  if (snap.status !== 'success') {
+    console.warn('[COST_SUCCESS]', 'skip_wrong_status', { jobId, status: snap.status })
+    return
+  }
+
+  const est = snap.cost_estimate
+  const update = await supabaseServer
+    .from('jobs')
+    .update({ cost_accumulated: est, cost_actual: est })
+    .eq('id', jobId)
+    .eq('status', 'success')
+    .select('id')
+    .maybeSingle()
+
+  if (update.error) {
+    console.error('[COST_UPDATE_FAILED]', 'markCostSuccess', jobId, update.error.message)
+    return
+  }
+  if (!update.data) {
+    console.log('[COST_SUCCESS]', 'no_matching_row', { jobId })
+    return
+  }
+  console.log('[COST_SUCCESS]', 'ok', { jobId, cost_accumulated: est, cost_actual: est })
+}
+
+async function markCostFailed(jobId: string): Promise<void> {
+  const snap = await readJobCostSnapshot(jobId)
+  if (snap.status !== 'failed') {
+    console.warn('[COST_FAILED]', 'skip_wrong_status', { jobId, status: snap.status })
+    return
+  }
+
+  let acc = snap.cost_accumulated
+  if (acc == null || !Number.isFinite(acc)) {
+    acc = 0
+  }
+
+  const update = await supabaseServer
+    .from('jobs')
+    .update({ cost_actual: acc })
+    .eq('id', jobId)
+    .eq('status', 'failed')
+    .select('id')
+    .maybeSingle()
+
+  if (update.error) {
+    console.error('[COST_UPDATE_FAILED]', 'markCostFailed', jobId, update.error.message)
+    return
+  }
+  if (!update.data) {
+    console.log('[COST_FAILED]', 'no_matching_row', { jobId })
+    return
+  }
+  console.log('[COST_FAILED]', 'ok', { jobId, cost_actual: acc })
+}
+
 async function handleAnalyzeJob(payload: AnalyzePayload) {
   const now = new Date().toISOString()
 
@@ -114,6 +261,8 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       error_code: null,
       error_message: null,
     })
+
+    await markCostRunning(payload.job_id)
 
     await addJobEvent({
       job_id: payload.job_id,
@@ -139,6 +288,8 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
       error_message: null,
     })
 
+    await markCostSuccess(payload.job_id)
+
     await addJobEvent({
       job_id: payload.job_id,
       level: 'info',
@@ -159,6 +310,7 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
         error_code: errorCode,
         error_message: errorMessage,
       })
+      await markCostFailed(payload.job_id)
     } catch (statusUpdateError) {
       console.error('jobs_failed_update_failed:', getErrorMessage(statusUpdateError))
     }
@@ -194,6 +346,8 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       error_code: null,
       error_message: null,
     })
+
+    await markCostRunning(payload.job_id)
 
     await addJobEvent({
       job_id: payload.job_id,
@@ -249,6 +403,8 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       error_code: null,
       error_message: null,
     })
+
+    await markCostSuccess(payload.job_id)
 
     const gateConfigResult = await supabaseServer
       .from('quality_gates')
@@ -344,6 +500,7 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
         error_code: errorCode,
         error_message: errorMessage,
       })
+      await markCostFailed(payload.job_id)
     } catch (statusUpdateError) {
       console.error('jobs_failed_update_failed:', getErrorMessage(statusUpdateError))
     }
@@ -421,6 +578,8 @@ async function handlePreviewJob(payload: PreviewPayload) {
     output_asset_key: null,
   })
 
+  await markCostRunning(jobId)
+
   await addJobEvent({
     job_id: jobId,
     level: 'info',
@@ -450,6 +609,7 @@ async function handlePreviewJob(payload: PreviewPayload) {
       error_message: msg,
       output_asset_key: null,
     })
+    await markCostFailed(jobId)
     await addJobEvent({
       job_id: jobId,
       level: 'error',
@@ -497,6 +657,7 @@ async function handlePreviewJob(payload: PreviewPayload) {
       error_message: msg,
       output_asset_key: null,
     })
+    await markCostFailed(jobId)
     await addJobEvent({
       job_id: jobId,
       level: 'error',
@@ -534,6 +695,8 @@ async function handlePreviewJob(payload: PreviewPayload) {
     error_message: null,
     output_asset_key: objectPath,
   })
+
+  await markCostSuccess(jobId)
 
   await addJobEvent({
     job_id: jobId,
