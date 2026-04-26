@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { jobQueue } from '@/lib/queue'
+import { getMvpJobCostPolicy } from '@/lib/costs/policy'
 import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
@@ -163,12 +164,22 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const costSnapshot = getMvpJobCostPolicy(job_type)
+
     const { data, error } = await supabaseAdmin
       .from('jobs')
       .insert({
         project_id,
         job_type,
         status: 'queued',
+        cost_estimate: costSnapshot.cost_estimate,
+        cost_accumulated: costSnapshot.cost_accumulated,
+        soft_cost_limit: costSnapshot.soft_cost_limit,
+        hard_cost_limit: costSnapshot.hard_cost_limit,
+        estimated_cost_preflight: costSnapshot.estimated_cost_preflight,
+        budget_precheck_status: costSnapshot.budget_precheck_status,
+        budget_precheck_reason: costSnapshot.budget_precheck_reason,
+        kill_signal: false,
       })
       .select('id, project_id, job_type, status, created_at')
       .single()
