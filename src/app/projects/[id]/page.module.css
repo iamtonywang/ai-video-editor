@@ -323,6 +323,16 @@
   word-break: break-all;
 }
 
+.resultStatus {
+  margin: 0;
+  width: 100%;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #6b7280;
+  text-align: center;
+}
+
 .previewResultActions {
   width: 100%;
   max-width: 560px;

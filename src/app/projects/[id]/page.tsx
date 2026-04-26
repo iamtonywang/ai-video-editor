@@ -850,47 +850,49 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
             </section>
           </div>
 
-          <div className={styles.workflowStep}>
-            <section className={styles.jobCard} aria-label="Progress">
-              {jobStatusLoading ? (
-                <p className={styles.metaHint}>불러오는 중…</p>
-              ) : jobStatusError ? (
-                <p className={styles.referenceError} role="alert">
-                  {jobStatusError}
-                </p>
-              ) : !jobStatus.job ? (
-                <p className={styles.metaHint}>아직 작업이 없습니다</p>
-              ) : (
-                <>
-                  <p className={styles.progressStatus} aria-live="polite">
-                    {progressLabel}
+          {!shouldShowPreviewResult ? (
+            <div className={styles.workflowStep}>
+              <section className={styles.jobCard} aria-label="Progress">
+                {jobStatusLoading ? (
+                  <p className={styles.metaHint}>불러오는 중…</p>
+                ) : jobStatusError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {jobStatusError}
                   </p>
-                  {jobStatus.job.status === 'failed' ? (
-                    <p className={styles.referenceError} role="alert">
-                      생성에 실패했습니다. 다시 시도해주세요.
+                ) : !jobStatus.job ? (
+                  <p className={styles.metaHint}>아직 작업이 없습니다</p>
+                ) : (
+                  <>
+                    <p className={styles.progressStatus} aria-live="polite">
+                      {progressLabel}
                     </p>
-                  ) : null}
-                  {stopButtonVisible ? (
-                    <div className={styles.jobActions}>
-                      <button
-                        type="button"
-                        className={styles.stopButton}
-                        disabled={stoppingJob}
-                        onClick={handleStopJob}
-                      >
-                        {stoppingJob ? 'Stopping...' : 'Stop'}
-                      </button>
-                    </div>
-                  ) : null}
-                  {stopJobError ? (
-                    <p className={styles.referenceError} role="alert">
-                      {stopJobError}
-                    </p>
-                  ) : null}
-                </>
-              )}
-            </section>
-          </div>
+                    {jobStatus.job.status === 'failed' ? (
+                      <p className={styles.referenceError} role="alert">
+                        생성에 실패했습니다. 다시 시도해주세요.
+                      </p>
+                    ) : null}
+                    {stopButtonVisible ? (
+                      <div className={styles.jobActions}>
+                        <button
+                          type="button"
+                          className={styles.stopButton}
+                          disabled={stoppingJob}
+                          onClick={handleStopJob}
+                        >
+                          {stoppingJob ? 'Stopping...' : 'Stop'}
+                        </button>
+                      </div>
+                    ) : null}
+                    {stopJobError ? (
+                      <p className={styles.referenceError} role="alert">
+                        {stopJobError}
+                      </p>
+                    ) : null}
+                  </>
+                )}
+              </section>
+            </div>
+          ) : null}
 
           {shouldShowPreviewResult ? (
             <div className={styles.workflowStep}>
@@ -919,6 +921,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     )}
                   </div>
                   <p className={styles.previewViewerKey}>{previewResultAssetKey ?? '-'}</p>
+                  <p className={styles.resultStatus} aria-live="polite">
+                    {progressLabel}
+                  </p>
                   <div className={styles.previewResultActions}>
                     <button
                       type="button"
