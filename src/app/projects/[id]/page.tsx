@@ -995,6 +995,21 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   <div className={styles.previewResultActions}>
                     <button
                       type="button"
+                      className={styles.previewResultDownloadButton}
+                      onClick={() => {
+                        const jobId = jobStatus.job?.id ?? ''
+                        if (!projectId || !jobId) return
+                        window.open(
+                          `/api/projects/${projectId}/jobs/${jobId}/preview-download`,
+                          '_blank',
+                          'noopener,noreferrer'
+                        )
+                      }}
+                    >
+                      다운로드
+                    </button>
+                    <button
+                      type="button"
                       className={styles.previewResultDeleteButton}
                       disabled={deletingPreviewResult}
                       onClick={handleDeletePreviewResult}

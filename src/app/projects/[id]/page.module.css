@@ -365,6 +365,32 @@
   max-width: 560px;
   display: flex;
   justify-content: center;
+  gap: 10px;
+}
+
+.previewResultDownloadButton {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid #d1d1d1;
+  border-radius: 14px;
+  background: transparent;
+  color: #111827;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.previewResultDownloadButton:hover {
+  border-color: #b8b8b8;
+  background: rgba(235, 235, 235, 0.45);
+}
+
+.previewResultDownloadButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .previewResultDeleteButton {
