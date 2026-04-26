@@ -178,6 +178,31 @@ async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot | nul
   }
 }
 
+function logCostLimitWarnings(
+  jobId: string,
+  phase: string,
+  amount: number,
+  softLimit: number,
+  hardLimit: number
+): void {
+  if (softLimit > 0 && amount > softLimit) {
+    console.warn('[COST_SOFT_LIMIT_EXCEEDED]', {
+      jobId,
+      phase,
+      amount,
+      soft_cost_limit: softLimit,
+    })
+  }
+  if (hardLimit > 0 && amount > hardLimit) {
+    console.warn('[COST_HARD_LIMIT_EXCEEDED]', {
+      jobId,
+      phase,
+      amount,
+      hard_cost_limit: hardLimit,
+    })
+  }
+}
+
 async function markCostRunning(jobId: string): Promise<void> {
   try {
     const snap = await readJobCostSnapshot(jobId)
@@ -214,6 +239,7 @@ async function markCostRunning(jobId: string): Promise<void> {
       console.log('[COST_RUNNING]', 'no_matching_row', { jobId })
       return
     }
+    logCostLimitWarnings(jobId, 'running', runningAccumulated, snap.soft_cost_limit, snap.hard_cost_limit)
     console.log('[COST_RUNNING]', 'ok', { jobId, cost_accumulated: runningAccumulated })
   } catch (err) {
     console.error('[COST_RUNNING_FAILED]', { jobId, error: getErrorMessage(err) })
@@ -273,6 +299,7 @@ async function markCostSuccess(jobId: string): Promise<void> {
       })
       return
     }
+    logCostLimitWarnings(jobId, 'success', est, snap.soft_cost_limit, snap.hard_cost_limit)
     console.log('[COST_SUCCESS]', 'ok', { jobId, cost_accumulated: est, cost_actual: est })
   } catch (err) {
     console.error('[COST_SUCCESS_FAILED]', { job_id: jobId, error: getErrorMessage(err) })
