@@ -114,6 +114,15 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       finished_at: string | null
       output_asset_key: string | null
       preview_url?: string | null
+      kill_signal: boolean
+      cost_estimate: number | null
+      cost_accumulated: number | null
+      cost_actual: number | null
+      soft_cost_limit: number | null
+      hard_cost_limit: number | null
+      estimated_cost_preflight: number | null
+      budget_precheck_status: string | null
+      budget_precheck_reason: string | null
     }
     latest_event: null | {
       level: string
@@ -166,6 +175,15 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 finished_at: string | null
                 output_asset_key: string | null
                 preview_url: string | null
+                kill_signal: boolean
+                cost_estimate: number | null
+                cost_accumulated: number | null
+                cost_actual: number | null
+                soft_cost_limit: number | null
+                hard_cost_limit: number | null
+                estimated_cost_preflight: number | null
+                budget_precheck_status: string | null
+                budget_precheck_reason: string | null
               }
               latest_event: null | {
                 level: string
@@ -318,10 +336,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   }, [status, canRunIdentity, blockedReason, hasRunningBuildIdentity, isSubmitting])
 
   const shouldPollJobStatus = useMemo(() => {
+    if (jobStatus.job?.kill_signal === true) return false
     const s = jobStatus.job?.status ?? ''
     if (s === 'success' || s === 'failed' || s === 'canceled') return false
     return s === 'queued' || s === 'running'
-  }, [jobStatus.job?.status])
+  }, [jobStatus.job?.status, jobStatus.job?.kill_signal])
 
   const previewResultAssetKey = useMemo(() => {
     const job = jobStatus.job
@@ -352,13 +371,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   }, [previewSubmitting, jobStatus.job?.job_type, jobStatus.job?.status])
 
   const progressLabel = useMemo(() => {
+    if (jobStatus.job?.kill_signal === true) return '비용 한도 초과'
     const s = jobStatus.job?.status ?? ''
     if (s === 'queued') return '대기 중'
     if (s === 'running') return '생성 중'
     if (s === 'success') return '완료'
     if (s === 'failed') return '실패'
     return s ? s : '-'
-  }, [jobStatus.job?.status])
+  }, [jobStatus.job?.status, jobStatus.job?.kill_signal])
 
   const [deletingPreviewResult, setDeletingPreviewResult] = useState(false)
   const [deletePreviewResultError, setDeletePreviewResultError] = useState<string | null>(null)
