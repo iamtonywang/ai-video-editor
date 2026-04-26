@@ -119,7 +119,27 @@ function parseJobNumericField(jobId: string, field: string, value: unknown): num
   return n
 }
 
-async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot> {
+async function shouldSkipTerminalJob(jobId: string, jobType: string): Promise<boolean> {
+  const result = await supabaseServer.from('jobs').select('status').eq('id', jobId).maybeSingle()
+
+  if (result.error) {
+    console.error('[WORKER_STATUS_READ_FAILED]', {
+      job_id: jobId,
+      error: result.error.message,
+    })
+    return true
+  }
+
+  const status = result.data?.status
+  if (status === 'success' || status === 'failed' || status === 'canceled') {
+    console.log('[WORKER_SKIP_TERMINAL_JOB]', { job_id: jobId, status, job_type: jobType })
+    return true
+  }
+
+  return false
+}
+
+async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot | null> {
   const result = await supabaseServer
     .from('jobs')
     .select(
@@ -129,11 +149,16 @@ async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot> {
     .maybeSingle()
 
   if (result.error) {
-    throw new Error(`readJobCostSnapshot_failed: ${result.error.message}`)
+    console.error('[COST_JOB_SNAPSHOT_READ_FAILED]', {
+      job_id: jobId,
+      error: result.error.message,
+    })
+    return null
   }
   const row = result.data
   if (!row?.id) {
-    throw new Error(`JOB_NOT_FOUND_FOR_COST: ${jobId}`)
+    console.error('[COST_JOB_NOT_FOUND]', { job_id: jobId })
+    return null
   }
 
   const cost_estimate = parseJobNumericField(jobId, 'cost_estimate', row.cost_estimate)
@@ -156,6 +181,9 @@ async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot> {
 async function markCostRunning(jobId: string): Promise<void> {
   try {
     const snap = await readJobCostSnapshot(jobId)
+    if (snap === null) {
+      return
+    }
     const st = snap.status
 
     if (st === 'success' || st === 'failed' || st === 'canceled') {
@@ -193,65 +221,131 @@ async function markCostRunning(jobId: string): Promise<void> {
 }
 
 async function markCostSuccess(jobId: string): Promise<void> {
-  const snap = await readJobCostSnapshot(jobId)
-  if (snap.status !== 'success') {
-    console.warn('[COST_SUCCESS]', 'skip_wrong_status', { jobId, status: snap.status })
-    return
-  }
+  try {
+    const snap = await readJobCostSnapshot(jobId)
+    if (snap === null) {
+      return
+    }
+    if (snap.status !== 'success') {
+      console.warn('[COST_SUCCESS]', 'skip_wrong_status', { jobId, status: snap.status })
+      return
+    }
 
-  const est = snap.cost_estimate
-  const update = await supabaseServer
-    .from('jobs')
-    .update({ cost_accumulated: est, cost_actual: est })
-    .eq('id', jobId)
-    .eq('status', 'success')
-    .select('id')
-    .maybeSingle()
+    const rawActual = await supabaseServer
+      .from('jobs')
+      .select('cost_actual')
+      .eq('id', jobId)
+      .maybeSingle()
 
-  if (update.error) {
-    console.error('[COST_UPDATE_FAILED]', 'markCostSuccess', jobId, update.error.message)
-    return
+    if (!rawActual.error && rawActual.data != null && rawActual.data.cost_actual != null) {
+      console.log('[COST_SUCCESS]', 'skip_already_finalized', { job_id: jobId })
+      return
+    }
+
+    const est = snap.cost_estimate
+    const update = await supabaseServer
+      .from('jobs')
+      .update({ cost_accumulated: est, cost_actual: est })
+      .eq('id', jobId)
+      .eq('status', 'success')
+      .is('cost_actual', null)
+      .select('id')
+      .maybeSingle()
+
+    if (update.error) {
+      console.error('[COST_UPDATE_FAILED]', 'markCostSuccess', jobId, update.error.message)
+      return
+    }
+    if (!update.data) {
+      const recheck = await supabaseServer
+        .from('jobs')
+        .select('status, cost_actual')
+        .eq('id', jobId)
+        .maybeSingle()
+      if (recheck.error || !recheck.data) {
+        console.warn('[COST_RECHECK_FAILED]', { job_id: jobId })
+        return
+      }
+      console.log('[COST_SUCCESS]', 'skip_no_matching_row', {
+        job_id: jobId,
+        current_status: recheck.data.status,
+        current_cost_actual: recheck.data.cost_actual,
+      })
+      return
+    }
+    console.log('[COST_SUCCESS]', 'ok', { jobId, cost_accumulated: est, cost_actual: est })
+  } catch (err) {
+    console.error('[COST_SUCCESS_FAILED]', { job_id: jobId, error: getErrorMessage(err) })
   }
-  if (!update.data) {
-    console.log('[COST_SUCCESS]', 'no_matching_row', { jobId })
-    return
-  }
-  console.log('[COST_SUCCESS]', 'ok', { jobId, cost_accumulated: est, cost_actual: est })
 }
 
 async function markCostFailed(jobId: string): Promise<void> {
-  const snap = await readJobCostSnapshot(jobId)
-  if (snap.status !== 'failed') {
-    console.warn('[COST_FAILED]', 'skip_wrong_status', { jobId, status: snap.status })
-    return
-  }
+  try {
+    const snap = await readJobCostSnapshot(jobId)
+    if (snap === null) {
+      return
+    }
+    if (snap.status !== 'failed') {
+      console.warn('[COST_FAILED]', 'skip_wrong_status', { jobId, status: snap.status })
+      return
+    }
 
-  let acc = snap.cost_accumulated
-  if (acc == null || !Number.isFinite(acc)) {
-    acc = 0
-  }
+    const rawActual = await supabaseServer
+      .from('jobs')
+      .select('cost_actual')
+      .eq('id', jobId)
+      .maybeSingle()
 
-  const update = await supabaseServer
-    .from('jobs')
-    .update({ cost_actual: acc })
-    .eq('id', jobId)
-    .eq('status', 'failed')
-    .select('id')
-    .maybeSingle()
+    if (!rawActual.error && rawActual.data != null && rawActual.data.cost_actual != null) {
+      console.log('[COST_FAILED]', 'skip_already_finalized', { job_id: jobId })
+      return
+    }
 
-  if (update.error) {
-    console.error('[COST_UPDATE_FAILED]', 'markCostFailed', jobId, update.error.message)
-    return
+    let acc = snap.cost_accumulated
+    if (acc == null || !Number.isFinite(acc)) {
+      acc = 0
+    }
+
+    const update = await supabaseServer
+      .from('jobs')
+      .update({ cost_actual: acc })
+      .eq('id', jobId)
+      .eq('status', 'failed')
+      .is('cost_actual', null)
+      .select('id')
+      .maybeSingle()
+
+    if (update.error) {
+      console.error('[COST_UPDATE_FAILED]', 'markCostFailed', jobId, update.error.message)
+      return
+    }
+    if (!update.data) {
+      const recheck = await supabaseServer
+        .from('jobs')
+        .select('status, cost_actual')
+        .eq('id', jobId)
+        .maybeSingle()
+      if (recheck.error || !recheck.data) {
+        console.warn('[COST_RECHECK_FAILED]', { job_id: jobId })
+        return
+      }
+      console.log('[COST_FAILED]', 'skip_no_matching_row', {
+        job_id: jobId,
+        current_status: recheck.data.status,
+        current_cost_actual: recheck.data.cost_actual,
+      })
+      return
+    }
+    console.log('[COST_FAILED]', 'ok', { jobId, cost_actual: acc })
+  } catch (err) {
+    console.error('[COST_FAILED_FAILED]', { job_id: jobId, error: getErrorMessage(err) })
   }
-  if (!update.data) {
-    console.log('[COST_FAILED]', 'no_matching_row', { jobId })
-    return
-  }
-  console.log('[COST_FAILED]', 'ok', { jobId, cost_actual: acc })
 }
 
 async function handleAnalyzeJob(payload: AnalyzePayload) {
   const now = new Date().toISOString()
+
+  if (await shouldSkipTerminalJob(payload.job_id, 'analyze')) return
 
   try {
     // Locked analyze sync pattern:
@@ -340,6 +434,8 @@ async function handleAnalyzeJob(payload: AnalyzePayload) {
 
 async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
   const now = new Date().toISOString()
+
+  if (await shouldSkipTerminalJob(payload.job_id, 'build_identity')) return
 
   try {
     await updateAnalyzeJobStatus({
@@ -570,6 +666,9 @@ async function handlePreviewJob(payload: PreviewPayload) {
   const now = new Date().toISOString()
   const jobId = payload.job_id
   const projectId = payload.project_id
+
+  if (await shouldSkipTerminalJob(jobId, 'preview')) return
+
   const instructionLength = (payload.instruction ?? '').length
 
   await updateAnalyzeJobStatus({
