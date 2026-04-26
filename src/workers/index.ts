@@ -154,38 +154,42 @@ async function readJobCostSnapshot(jobId: string): Promise<JobCostSnapshot> {
 }
 
 async function markCostRunning(jobId: string): Promise<void> {
-  const snap = await readJobCostSnapshot(jobId)
-  const st = snap.status
+  try {
+    const snap = await readJobCostSnapshot(jobId)
+    const st = snap.status
 
-  if (st === 'success' || st === 'failed' || st === 'canceled') {
-    console.log('[COST_RUNNING]', 'skip_terminal_status', { jobId, status: st })
-    return
+    if (st === 'success' || st === 'failed' || st === 'canceled') {
+      console.log('[COST_RUNNING]', 'skip_terminal_status', { jobId, status: st })
+      return
+    }
+
+    if (st !== 'running') {
+      console.warn('[COST_RUNNING]', 'skip_not_running', { jobId, status: st })
+      return
+    }
+
+    const runningAccumulated = snap.cost_estimate * 0.5
+
+    const update = await supabaseServer
+      .from('jobs')
+      .update({ cost_accumulated: runningAccumulated })
+      .eq('id', jobId)
+      .eq('status', 'running')
+      .select('id')
+      .maybeSingle()
+
+    if (update.error) {
+      console.error('[COST_UPDATE_FAILED]', 'markCostRunning', jobId, update.error.message)
+      return
+    }
+    if (!update.data) {
+      console.log('[COST_RUNNING]', 'no_matching_row', { jobId })
+      return
+    }
+    console.log('[COST_RUNNING]', 'ok', { jobId, cost_accumulated: runningAccumulated })
+  } catch (err) {
+    console.error('[COST_RUNNING_FAILED]', { jobId, error: getErrorMessage(err) })
   }
-
-  if (st !== 'running') {
-    console.warn('[COST_RUNNING]', 'skip_not_running', { jobId, status: st })
-    return
-  }
-
-  const runningAccumulated = snap.cost_estimate * 0.5
-
-  const update = await supabaseServer
-    .from('jobs')
-    .update({ cost_accumulated: runningAccumulated })
-    .eq('id', jobId)
-    .eq('status', 'running')
-    .select('id')
-    .maybeSingle()
-
-  if (update.error) {
-    console.error('[COST_UPDATE_FAILED]', 'markCostRunning', jobId, update.error.message)
-    return
-  }
-  if (!update.data) {
-    console.log('[COST_RUNNING]', 'no_matching_row', { jobId })
-    return
-  }
-  console.log('[COST_RUNNING]', 'ok', { jobId, cost_accumulated: runningAccumulated })
 }
 
 async function markCostSuccess(jobId: string): Promise<void> {
