@@ -1,10 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_READINESS_STATUS = ['pending', 'analyzing', 'ready', 'failed']
 
+function isValidProjectUuid(projectId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    projectId
+  )
+}
+
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
     const body = await req.json()
 
     const project_id = body?.project_id
@@ -32,6 +48,37 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { ok: false, error: 'REQUIRED_FIELDS_MISSING' },
         { status: 400 }
+      )
+    }
+
+    const projectIdStr =
+      typeof project_id === 'string' ? project_id.trim() : String(project_id).trim()
+
+    if (!isValidProjectUuid(projectIdStr)) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_PROJECT_ID' },
+        { status: 400 }
+      )
+    }
+
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', projectIdStr)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
+      return NextResponse.json(
+        { ok: false, error: projectError.message },
+        { status: 500 }
+      )
+    }
+
+    if (!projectRow) {
+      return NextResponse.json(
+        { ok: false, error: 'PROJECT_NOT_FOUND' },
+        { status: 404 }
       )
     }
 
@@ -72,7 +119,7 @@ export async function POST(req: NextRequest) {
     const latestIdentityGate = await supabaseAdmin
       .from('gate_evaluations')
       .select('decision')
-      .eq('project_id', project_id)
+      .eq('project_id', projectIdStr)
       .eq('gate_type', 'identity')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -95,7 +142,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await supabaseAdmin
       .from('sequences')
       .insert({
-        project_id,
+        project_id: projectIdStr,
         source_asset_id,
         duration_sec,
         fps,

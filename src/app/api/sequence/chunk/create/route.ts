@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_RENDER_STATUS = [
@@ -14,8 +15,23 @@ const ALLOWED_RENDER_STATUS = [
   'stopped',
 ]
 
+function isValidSceneUuid(sceneId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    sceneId
+  )
+}
+
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
     const body = await req.json()
 
     const scene_id = body?.scene_id
@@ -50,6 +66,16 @@ export async function POST(req: NextRequest) {
     ) {
       return NextResponse.json(
         { ok: false, error: 'REQUIRED_FIELDS_MISSING' },
+        { status: 400 }
+      )
+    }
+
+    const sceneIdStr =
+      typeof scene_id === 'string' ? scene_id.trim() : String(scene_id).trim()
+
+    if (!isValidSceneUuid(sceneIdStr)) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_SCENE_ID' },
         { status: 400 }
       )
     }
@@ -110,7 +136,7 @@ export async function POST(req: NextRequest) {
     const sceneSequence = await supabaseAdmin
       .from('sequence_scenes')
       .select('sequence_id')
-      .eq('id', scene_id)
+      .eq('id', sceneIdStr)
       .maybeSingle()
 
     if (sceneSequence.error) {
@@ -147,10 +173,33 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const resolvedProjectId = String(sequenceProject.data.project_id).trim()
+
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', resolvedProjectId)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
+      return NextResponse.json(
+        { ok: false, error: projectError.message },
+        { status: 500 }
+      )
+    }
+
+    if (!projectRow) {
+      return NextResponse.json(
+        { ok: false, error: 'PROJECT_NOT_FOUND' },
+        { status: 404 }
+      )
+    }
+
     const latestIdentityGate = await supabaseAdmin
       .from('gate_evaluations')
       .select('decision')
-      .eq('project_id', sequenceProject.data.project_id)
+      .eq('project_id', resolvedProjectId)
       .eq('gate_type', 'identity')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -171,7 +220,7 @@ export async function POST(req: NextRequest) {
     }
 
     const chunkInsertPayload: Record<string, unknown> = {
-      scene_id,
+      scene_id: sceneIdStr,
       chunk_index,
       start_sec,
       end_sec,
@@ -225,7 +274,7 @@ export async function POST(req: NextRequest) {
     const chunkIdentityGateConfig = await supabaseAdmin
       .from('quality_gates')
       .select('threshold')
-      .eq('project_id', sequenceProject.data.project_id)
+      .eq('project_id', resolvedProjectId)
       .eq('gate_type', 'identity')
       .eq('scope_type', 'chunk')
       .order('created_at', { ascending: false })
@@ -248,7 +297,7 @@ export async function POST(req: NextRequest) {
         decision === 'blocked' ? 'CHUNK_IDENTITY_SCORE_BELOW_THRESHOLD' : null
 
       const gateEvaluationInsert = await supabaseAdmin.from('gate_evaluations').insert({
-        project_id: sequenceProject.data.project_id,
+        project_id: resolvedProjectId,
         gate_type: 'identity',
         scope_type: 'chunk',
         chunk_id: data.id,

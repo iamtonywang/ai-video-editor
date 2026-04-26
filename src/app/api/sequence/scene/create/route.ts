@@ -1,10 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_DIFFICULTY_LEVEL = ['low', 'medium', 'high']
 
+function isValidSequenceUuid(sequenceId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    sequenceId
+  )
+}
+
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
     const body = await req.json()
 
     const sequence_id = body?.sequence_id
@@ -25,6 +41,16 @@ export async function POST(req: NextRequest) {
     ) {
       return NextResponse.json(
         { ok: false, error: 'REQUIRED_FIELDS_MISSING' },
+        { status: 400 }
+      )
+    }
+
+    const sequenceIdStr =
+      typeof sequence_id === 'string' ? sequence_id.trim() : String(sequence_id).trim()
+
+    if (!isValidSequenceUuid(sequenceIdStr)) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_SEQUENCE_ID' },
         { status: 400 }
       )
     }
@@ -64,7 +90,7 @@ export async function POST(req: NextRequest) {
     const sequenceProject = await supabaseAdmin
       .from('sequences')
       .select('project_id')
-      .eq('id', sequence_id)
+      .eq('id', sequenceIdStr)
       .maybeSingle()
 
     if (sequenceProject.error) {
@@ -81,10 +107,33 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const resolvedProjectId = String(sequenceProject.data.project_id).trim()
+
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', resolvedProjectId)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
+      return NextResponse.json(
+        { ok: false, error: projectError.message },
+        { status: 500 }
+      )
+    }
+
+    if (!projectRow) {
+      return NextResponse.json(
+        { ok: false, error: 'PROJECT_NOT_FOUND' },
+        { status: 404 }
+      )
+    }
+
     const latestIdentityGate = await supabaseAdmin
       .from('gate_evaluations')
       .select('decision')
-      .eq('project_id', sequenceProject.data.project_id)
+      .eq('project_id', resolvedProjectId)
       .eq('gate_type', 'identity')
       .order('created_at', { ascending: false })
       .limit(1)
@@ -107,7 +156,7 @@ export async function POST(req: NextRequest) {
     const { data, error } = await supabaseAdmin
       .from('sequence_scenes')
       .insert({
-        sequence_id,
+        sequence_id: sequenceIdStr,
         scene_index,
         start_sec,
         end_sec,

@@ -1,8 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { jobQueue } from '@/lib/queue'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_IDENTITY_STATUS = ['building', 'ready', 'failed', 'stale']
+
+function isValidProjectUuid(projectId: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    projectId
+  )
+}
 
 function trimStr(v: unknown): string {
   if (typeof v === 'string') return v.trim()
@@ -17,6 +24,15 @@ function asProjectId(v: unknown): string {
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
     const body = await req.json()
 
     const project_id = asProjectId(body?.project_id)
@@ -24,6 +40,34 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         { ok: false, error: 'REQUIRED_FIELDS_MISSING' },
         { status: 400 }
+      )
+    }
+
+    if (!isValidProjectUuid(project_id)) {
+      return NextResponse.json(
+        { ok: false, error: 'INVALID_PROJECT_ID' },
+        { status: 400 }
+      )
+    }
+
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', project_id)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
+      return NextResponse.json(
+        { ok: false, error: projectError.message },
+        { status: 500 }
+      )
+    }
+
+    if (!projectRow) {
+      return NextResponse.json(
+        { ok: false, error: 'PROJECT_NOT_FOUND' },
+        { status: 404 }
       )
     }
 
@@ -188,6 +232,51 @@ export async function POST(req: NextRequest) {
     } catch (enqueueError) {
       const enqueueMessage =
         enqueueError instanceof Error ? enqueueError.message : 'UNKNOWN_ERROR'
+
+      const now = new Date().toISOString()
+      try {
+        const { error: fixError } = await supabaseAdmin
+          .from('jobs')
+          .update({
+            status: 'failed',
+            error_code: 'JOB_ENQUEUE_FAILED',
+            error_message: enqueueMessage,
+            finished_at: now,
+            updated_at: now,
+          })
+          .eq('id', data.id)
+        if (fixError) {
+          console.warn('POST /api/identity/build enqueue failure fix warning:', fixError.message)
+        }
+      } catch (fixException) {
+        console.warn('POST /api/identity/build enqueue failure fix exception:', fixException)
+      }
+
+      try {
+        const { error: eventError } = await supabaseAdmin.from('job_events').insert({
+          job_id: data.id,
+          level: 'error',
+          step: 'enqueue_failed',
+          message: 'Failed to enqueue identity build job',
+          payload: {
+            error: enqueueMessage,
+            job_type: 'build_identity',
+            project_id,
+          },
+        })
+        if (eventError) {
+          console.warn(
+            'POST /api/identity/build enqueue_failed job_events insert warning:',
+            eventError.message
+          )
+        }
+      } catch (eventException) {
+        console.warn(
+          'POST /api/identity/build enqueue_failed job_events insert exception:',
+          eventException
+        )
+      }
+
       return NextResponse.json(
         { ok: false, error: 'JOB_ENQUEUE_FAILED', error_detail: enqueueMessage },
         { status: 500 }

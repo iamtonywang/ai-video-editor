@@ -1,34 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { jobQueue } from '@/lib/queue'
+import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 const ALLOWED_JOB_TYPE = [
   'analyze',
   'build_identity',
-  'render_chunk',
   'preview',
-  'quality_eval',
-]
-
-const ALLOWED_STATUS = [
-  'queued',
-  'running',
-  'success',
-  'failed',
-  'canceled',
 ]
 
 const ALLOWED_IDENTITY_STATUS = ['building', 'ready', 'failed', 'stale']
 
 export async function POST(req: NextRequest) {
   try {
+    const supabase = await createAuthServerClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+
+    if (!user) {
+      return NextResponse.json({ ok: false, error: 'AUTH_REQUIRED' }, { status: 401 })
+    }
+
     const body = await req.json()
 
     const project_id = body?.project_id
     const job_type =
       typeof body?.job_type === 'string' ? body.job_type.trim() : ''
-    const status =
-      typeof body?.status === 'string' ? body.status.trim() : ''
     const reference_asset_id = body?.reference_asset_id
     const embedding_key =
       typeof body?.embedding_key === 'string' ? body.embedding_key.trim() : ''
@@ -47,7 +45,7 @@ export async function POST(req: NextRequest) {
     const instruction =
       typeof body?.instruction === 'string' ? body.instruction.trim() : ''
 
-    if (!project_id || !job_type || !status) {
+    if (!project_id || !job_type) {
       return NextResponse.json(
         { ok: false, error: 'REQUIRED_FIELDS_MISSING' },
         { status: 400 }
@@ -61,10 +59,52 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    if (!ALLOWED_STATUS.includes(status)) {
+    const { data: projectRow, error: projectError } = await supabaseAdmin
+      .from('projects')
+      .select('id')
+      .eq('id', project_id)
+      .eq('owner_user_id', user.id)
+      .maybeSingle()
+
+    if (projectError) {
       return NextResponse.json(
-        { ok: false, error: 'INVALID_STATUS' },
-        { status: 400 }
+        { ok: false, error: projectError.message },
+        { status: 500 }
+      )
+    }
+
+    if (!projectRow) {
+      return NextResponse.json(
+        { ok: false, error: 'PROJECT_NOT_FOUND' },
+        { status: 404 }
+      )
+    }
+
+    const { data: dupRow, error: dupError } = await supabaseAdmin
+      .from('jobs')
+      .select('id')
+      .eq('project_id', project_id)
+      .eq('job_type', job_type)
+      .in('status', ['queued', 'running'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (dupError) {
+      return NextResponse.json(
+        { ok: false, error: dupError.message },
+        { status: 500 }
+      )
+    }
+
+    if (dupRow?.id != null && String(dupRow.id).trim() !== '') {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'JOB_ALREADY_RUNNING',
+          job_id: String(dupRow.id),
+        },
+        { status: 409 }
       )
     }
 
@@ -128,7 +168,7 @@ export async function POST(req: NextRequest) {
       .insert({
         project_id,
         job_type,
-        status,
+        status: 'queued',
       })
       .select('id, project_id, job_type, status, created_at')
       .single()
@@ -190,6 +230,50 @@ export async function POST(req: NextRequest) {
 
       const errorDetail =
         error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+
+      const now = new Date().toISOString()
+      try {
+        const { error: fixError } = await supabaseAdmin
+          .from('jobs')
+          .update({
+            status: 'failed',
+            error_code: 'JOB_ENQUEUE_FAILED',
+            error_message: errorDetail,
+            finished_at: now,
+            updated_at: now,
+          })
+          .eq('id', data.id)
+        if (fixError) {
+          console.warn('POST /api/job/create enqueue failure fix warning:', fixError.message)
+        }
+      } catch (fixException) {
+        console.warn('POST /api/job/create enqueue failure fix exception:', fixException)
+      }
+
+      try {
+        const { error: eventError } = await supabaseAdmin.from('job_events').insert({
+          job_id: data.id,
+          level: 'error',
+          step: 'enqueue_failed',
+          message: 'Failed to enqueue job',
+          payload: {
+            error: errorDetail,
+            job_type,
+            project_id,
+          },
+        })
+        if (eventError) {
+          console.warn(
+            'POST /api/job/create enqueue_failed job_events insert warning:',
+            eventError.message
+          )
+        }
+      } catch (eventException) {
+        console.warn(
+          'POST /api/job/create enqueue_failed job_events insert exception:',
+          eventException
+        )
+      }
 
       return NextResponse.json(
         {
