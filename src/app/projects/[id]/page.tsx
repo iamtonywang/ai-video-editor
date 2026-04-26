@@ -333,6 +333,27 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     return u ? u : null
   }, [jobStatus.job?.preview_url])
 
+  const generateDisabled = useMemo(() => {
+    if (previewSubmitting) return true
+    return previewInstruction.trim() === ''
+  }, [previewSubmitting, previewInstruction])
+
+  const generateInProgressMessageVisible = useMemo(() => {
+    if (previewSubmitting) return true
+    const j = jobStatus.job
+    if (!j || j.job_type !== 'preview') return false
+    return j.status === 'queued' || j.status === 'running'
+  }, [previewSubmitting, jobStatus.job?.job_type, jobStatus.job?.status])
+
+  const progressLabel = useMemo(() => {
+    const s = jobStatus.job?.status ?? ''
+    if (s === 'queued') return '대기 중'
+    if (s === 'running') return '생성 중'
+    if (s === 'success') return '완료'
+    if (s === 'failed') return '실패'
+    return s ? s : '-'
+  }, [jobStatus.job?.status])
+
   const [deletingPreviewResult, setDeletingPreviewResult] = useState(false)
   const [deletePreviewResultError, setDeletePreviewResultError] = useState<string | null>(null)
 
@@ -801,30 +822,30 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     disabled={previewSubmitting}
                     spellCheck={true}
                   />
+                  <button
+                    type="button"
+                    className={styles.promptRunButton}
+                    disabled={generateDisabled}
+                    onClick={handleRunPreview}
+                  >
+                    {previewSubmitting ? '생성 중...' : '생성하기'}
+                  </button>
+                  {generateInProgressMessageVisible ? (
+                    <p className={styles.generateInProgressHint} aria-live="polite">
+                      AI가 영상을 생성 중입니다...
+                    </p>
+                  ) : null}
+                  {previewValidationError ? (
+                    <p className={styles.referenceError} role="alert">
+                      {previewValidationError}
+                    </p>
+                  ) : null}
+                  {previewSubmitError ? (
+                    <p className={styles.referenceError} role="alert">
+                      {previewSubmitError}
+                    </p>
+                  ) : null}
                 </>
-              ) : null}
-            </section>
-          </div>
-
-          <div className={styles.workflowStep}>
-            <section className={styles.generateCard} aria-label="Generate preview">
-              <button
-                type="button"
-                className={styles.promptRunButton}
-                disabled={previewSubmitting}
-                onClick={handleRunPreview}
-              >
-                {previewSubmitting ? '생성 중…' : '생성하기'}
-              </button>
-              {previewValidationError ? (
-                <p className={styles.referenceError} role="alert">
-                  {previewValidationError}
-                </p>
-              ) : null}
-              {previewSubmitError ? (
-                <p className={styles.referenceError} role="alert">
-                  {previewSubmitError}
-                </p>
               ) : null}
             </section>
           </div>
@@ -840,38 +861,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
               ) : !jobStatus.job ? (
                 <p className={styles.metaHint}>아직 작업이 없습니다</p>
               ) : (
-                <div className={styles.jobGrid}>
-                  <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>작업 종류</span>
-                    <span className={styles.jobValue}>{jobStatus.job.job_type}</span>
-                  </div>
-                  <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>상태</span>
-                    <span className={styles.jobValue}>{jobStatus.job.status}</span>
-                  </div>
-                  <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>진행률</span>
-                    <span className={styles.jobValue}>
-                      {jobStatus.job.progress == null ? '-' : jobStatus.job.progress}
-                    </span>
-                  </div>
-                  <div className={styles.jobRow}>
-                    <span className={styles.jobKey}>최근 업데이트</span>
-                    <span className={styles.jobValue}>
-                      {jobStatus.latest_event?.message ?? '-'}
-                    </span>
-                  </div>
-                  {jobStatus.job.error_code ? (
-                    <div className={styles.jobRow}>
-                      <span className={styles.jobKey}>오류 코드</span>
-                      <span className={styles.jobValue}>{jobStatus.job.error_code}</span>
-                    </div>
-                  ) : null}
-                  {jobStatus.job.error_message ? (
-                    <div className={styles.jobRow}>
-                      <span className={styles.jobKey}>메시지</span>
-                      <span className={styles.jobValue}>{jobStatus.job.error_message}</span>
-                    </div>
+                <>
+                  <p className={styles.progressStatus} aria-live="polite">
+                    {progressLabel}
+                  </p>
+                  {jobStatus.job.status === 'failed' ? (
+                    <p className={styles.referenceError} role="alert">
+                      생성에 실패했습니다. 다시 시도해주세요.
+                    </p>
                   ) : null}
                   {stopButtonVisible ? (
                     <div className={styles.jobActions}>
@@ -890,7 +887,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       {stopJobError}
                     </p>
                   ) : null}
-                </div>
+                </>
               )}
             </section>
           </div>
@@ -938,13 +935,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     </p>
                   ) : null}
                 </div>
-                {!previewImageUrl || previewImageFailed ? (
-                  <p
-                    className={`${styles.promptNotImplementedHint} ${styles.previewResultDisclaimer}`}
-                  >
-                    미리보기는 현재 임시 화면입니다. 실제 렌더링은 아직 연결되지 않았습니다.
-                  </p>
-                ) : null}
               </section>
             </div>
           ) : null}
