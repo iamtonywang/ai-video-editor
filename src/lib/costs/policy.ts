@@ -37,8 +37,8 @@ const MVP_POLICIES: Record<MvpCostJobType, MvpJobCostPolicy> = {
   preview: {
     cost_estimate: 0.05,
     cost_accumulated: 0,
-    soft_cost_limit: 0.2,
-    hard_cost_limit: 0.4,
+    soft_cost_limit: 0.20,
+    hard_cost_limit: 0.40,
     estimated_cost_preflight: 0.05,
     budget_precheck_status: 'passed',
     budget_precheck_reason: 'MVP_STATIC_POLICY',
