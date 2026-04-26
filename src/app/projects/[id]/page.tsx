@@ -922,7 +922,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   </div>
                   <p className={styles.previewViewerKey}>{previewResultAssetKey ?? '-'}</p>
                   <p className={styles.resultStatus} aria-live="polite">
-                    {progressLabel}
+                    <span className={styles.resultStatusBadge}>상태: {progressLabel}</span>
                   </p>
                   <div className={styles.previewResultActions}>
                     <button
