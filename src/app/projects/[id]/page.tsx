@@ -314,6 +314,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
   const shouldPollJobStatus = useMemo(() => {
     const s = jobStatus.job?.status ?? ''
+    if (s === 'success' || s === 'failed' || s === 'canceled') return false
     return s === 'queued' || s === 'running'
   }, [jobStatus.job?.status])
 
