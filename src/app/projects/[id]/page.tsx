@@ -860,9 +860,13 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   <p className={styles.metaHint}>아직 작업이 없습니다</p>
                 ) : (
                   <>
-                    <p className={styles.progressStatus} aria-live="polite">
-                      {progressLabel}
-                    </p>
+                    {!(jobStatus.job.job_type === 'preview' &&
+                      jobStatus.job.status === 'success' &&
+                      previewResultAssetKey === null) ? (
+                      <p className={styles.progressStatus} aria-live="polite">
+                        {progressLabel}
+                      </p>
+                    ) : null}
                     {jobStatus.job.status === 'failed' ? (
                       <p className={styles.referenceError} role="alert">
                         생성에 실패했습니다. 다시 시도해주세요.
