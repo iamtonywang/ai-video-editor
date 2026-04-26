@@ -338,8 +338,11 @@
 
 .resultStatus {
   margin: 0;
+  margin-top: 10px;
   width: 100%;
   max-width: 560px;
+  display: flex;
+  justify-content: center;
   text-align: center;
 }
 
@@ -349,6 +352,7 @@
   justify-content: center;
   width: 100%;
   max-width: 560px;
+  flex: 1 1 auto;
   padding: 12px 14px;
   border-radius: 14px;
   border: 1px solid #d1d1d1;
@@ -358,6 +362,7 @@
   line-height: 1.2;
   font-weight: 600;
   text-align: center;
+  box-sizing: border-box;
 }
 
 .previewResultActions {
@@ -366,6 +371,7 @@
   display: flex;
   justify-content: center;
   gap: 10px;
+  margin-top: 10px;
 }
 
 .previewResultDownloadButton {
