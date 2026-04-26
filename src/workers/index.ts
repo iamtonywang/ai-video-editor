@@ -203,6 +203,105 @@ function logCostLimitWarnings(
   }
 }
 
+async function markHardLimitKillSignal(
+  jobId: string,
+  phase: string,
+  amount: number,
+  hardLimit: number
+): Promise<void> {
+  try {
+    if (hardLimit <= 0) {
+      return
+    }
+    if (amount <= hardLimit) {
+      return
+    }
+
+    const killUpdate = await supabaseServer
+      .from('jobs')
+      .update({ kill_signal: true })
+      .eq('id', jobId)
+      .or('kill_signal.eq.false,kill_signal.is.null')
+      .select('id')
+      .maybeSingle()
+
+    if (killUpdate.error) {
+      console.error('[KILL_SIGNAL_UPDATE_FAILED]', {
+        jobId,
+        phase,
+        error: killUpdate.error.message,
+      })
+    } else if (!killUpdate.data) {
+      const recheck = await supabaseServer
+        .from('jobs')
+        .select('status, kill_signal')
+        .eq('id', jobId)
+        .maybeSingle()
+      if (recheck.error || !recheck.data) {
+        console.warn('[KILL_SIGNAL_RECHECK_FAILED]', { jobId, phase })
+      } else {
+        console.warn('[KILL_SIGNAL_UPDATE_ZERO_ROWS]', {
+          jobId,
+          phase,
+          current_status: recheck.data.status,
+          current_kill_signal: recheck.data.kill_signal,
+        })
+      }
+    }
+
+    const { data: existingEvent, error: dedupError } = await supabaseServer
+      .from('job_events')
+      .select('id')
+      .eq('job_id', jobId)
+      .eq('step', 'cost_hard_limit_exceeded')
+      .limit(1)
+      .maybeSingle()
+
+    if (dedupError) {
+      console.warn('[COST_HARD_LIMIT_EVENT_DEDUP_FAILED]', {
+        jobId,
+        phase,
+        error: dedupError.message,
+      })
+      return
+    }
+    if (existingEvent?.id != null) {
+      console.log('[COST_HARD_LIMIT_EVENT_SKIP_DEDUP]', {
+        jobId,
+        phase,
+        step: 'cost_hard_limit_exceeded',
+      })
+      return
+    }
+
+    try {
+      await addJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'cost_hard_limit_exceeded',
+        message: 'Hard cost limit exceeded',
+        payload: {
+          phase,
+          amount,
+          hard_cost_limit: hardLimit,
+        },
+      })
+    } catch (err) {
+      console.warn('[COST_HARD_LIMIT_EVENT_INSERT_FAILED]', {
+        jobId,
+        phase,
+        error: getErrorMessage(err),
+      })
+    }
+  } catch (err) {
+    console.warn('[MARK_HARD_LIMIT_KILL_SIGNAL_FAILED]', {
+      jobId,
+      phase,
+      error: getErrorMessage(err),
+    })
+  }
+}
+
 async function markCostRunning(jobId: string): Promise<void> {
   try {
     const snap = await readJobCostSnapshot(jobId)
@@ -240,6 +339,7 @@ async function markCostRunning(jobId: string): Promise<void> {
       return
     }
     logCostLimitWarnings(jobId, 'running', runningAccumulated, snap.soft_cost_limit, snap.hard_cost_limit)
+    await markHardLimitKillSignal(jobId, 'running', runningAccumulated, snap.hard_cost_limit)
     console.log('[COST_RUNNING]', 'ok', { jobId, cost_accumulated: runningAccumulated })
   } catch (err) {
     console.error('[COST_RUNNING_FAILED]', { jobId, error: getErrorMessage(err) })
@@ -300,6 +400,7 @@ async function markCostSuccess(jobId: string): Promise<void> {
       return
     }
     logCostLimitWarnings(jobId, 'success', est, snap.soft_cost_limit, snap.hard_cost_limit)
+    await markHardLimitKillSignal(jobId, 'success', est, snap.hard_cost_limit)
     console.log('[COST_SUCCESS]', 'ok', { jobId, cost_accumulated: est, cost_actual: est })
   } catch (err) {
     console.error('[COST_SUCCESS_FAILED]', { job_id: jobId, error: getErrorMessage(err) })

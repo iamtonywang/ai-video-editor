@@ -48,7 +48,7 @@ export async function GET(_req: Request, context: RouteContext) {
     const { data: jobRow, error: jobError } = await supabaseAdmin
       .from('jobs')
       .select(
-        'id, job_type, status, progress, error_code, error_message, created_at, started_at, finished_at, output_asset_key'
+        'id, job_type, status, progress, error_code, error_message, created_at, started_at, finished_at, output_asset_key, kill_signal, cost_estimate, cost_accumulated, cost_actual, soft_cost_limit, hard_cost_limit, estimated_cost_preflight, budget_precheck_status, budget_precheck_reason'
       )
       .eq('project_id', project_id)
       .order('created_at', { ascending: false })
@@ -96,6 +96,18 @@ export async function GET(_req: Request, context: RouteContext) {
       }
     }
 
+    const row = jobRow as {
+      kill_signal?: boolean | null
+      cost_estimate?: number | null
+      cost_accumulated?: number | null
+      cost_actual?: number | null
+      soft_cost_limit?: number | null
+      hard_cost_limit?: number | null
+      estimated_cost_preflight?: number | null
+      budget_precheck_status?: string | null
+      budget_precheck_reason?: string | null
+    }
+
     return NextResponse.json({
       ok: true,
       data: {
@@ -111,6 +123,15 @@ export async function GET(_req: Request, context: RouteContext) {
           finished_at: jobRow.finished_at,
           output_asset_key: outputAssetKey ? outputAssetKey : null,
           preview_url,
+          kill_signal: row.kill_signal == null ? false : Boolean(row.kill_signal),
+          cost_estimate: row.cost_estimate ?? null,
+          cost_accumulated: row.cost_accumulated ?? null,
+          cost_actual: row.cost_actual ?? null,
+          soft_cost_limit: row.soft_cost_limit ?? null,
+          hard_cost_limit: row.hard_cost_limit ?? null,
+          estimated_cost_preflight: row.estimated_cost_preflight ?? null,
+          budget_precheck_status: row.budget_precheck_status ?? null,
+          budget_precheck_reason: row.budget_precheck_reason ?? null,
         },
         latest_event: eventRow
           ? {
