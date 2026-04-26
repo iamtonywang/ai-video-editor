@@ -798,3 +798,37 @@
     margin-top: 8px;
   }
 }
+
+@media (min-width: 1024px) {
+  .container {
+    max-width: 920px;
+  }
+
+  .actions,
+  .workflowStep,
+  .referenceCard,
+  .inputTypeCard,
+  .promptCard,
+  .jobCard,
+  .advancedSection,
+  .advancedToggle,
+  .advancedContent,
+  .advancedGateCard,
+  .sourceUploadBlock,
+  .promptTextarea,
+  .promptRunButton,
+  .previewViewerFrame,
+  .previewViewerKey,
+  .resultStatus,
+  .previewResultActions,
+  .previewResultDeleteButton,
+  .projectId,
+  .advancedPath,
+  .actionButton {
+    max-width: 920px;
+  }
+
+  .previewViewerFrame {
+    min-height: 420px;
+  }
+}
