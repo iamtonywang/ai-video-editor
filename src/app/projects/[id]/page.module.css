@@ -192,6 +192,18 @@
   text-transform: uppercase;
 }
 
+.advancedPath {
+  margin: 0;
+  width: 100%;
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #4b5563;
+  word-break: break-all;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
 .inputTypeHint {
   margin: 0;
   width: 100%;

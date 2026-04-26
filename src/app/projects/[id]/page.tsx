@@ -664,16 +664,12 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     <main className={styles.page}>
       <div className={styles.container}>
         <header className={styles.header}>
-          <h1 className={styles.title}>내 프로젝트</h1>
-          <p className={styles.headerSubtitle}>
-            필요한 내용을 입력하고 결과를 확인하세요.
-          </p>
+          <h1 className={styles.title}>Project</h1>
         </header>
 
         <section className={styles.actions}>
           <div className={styles.workflowStep}>
             <section className={styles.inputTypeCard} aria-label="Input type">
-              <p className={styles.inputTypeTitle}>작업 방식</p>
               <div className={styles.inputTypeGroup} role="group" aria-label="Input type">
                 <button
                   type="button"
@@ -733,11 +729,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   >
                     파일 선택
                   </button>
-                  <p className={styles.sourceFileNameLine} aria-live="polite">
-                    {referenceChosenFileLabel.trim()
-                      ? referenceChosenFileLabel
-                      : '선택된 파일 없음'}
-                  </p>
+                  {referenceChosenFileLabel.trim() ? (
+                    <p className={styles.sourceFileNameLine} aria-live="polite">
+                      {referenceChosenFileLabel}
+                    </p>
+                  ) : null}
                   {uploadReferenceSubmitting ? (
                     <p className={styles.sourceUploadStatus} aria-live="polite">
                       업로드 중…
@@ -920,7 +916,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       </p>
                     )}
                   </div>
-                  <p className={styles.previewViewerKey}>{previewResultAssetKey ?? '-'}</p>
+                  <p className={styles.previewViewerKey}>preview.webp</p>
                   <p className={styles.resultStatus} aria-live="polite">
                     <span className={styles.resultStatusBadge}>상태: {progressLabel}</span>
                   </p>
@@ -961,6 +957,12 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 </p>
                 <p className={styles.label}>프로젝트 ID</p>
                 <p className={styles.projectId}>{projectId || '알 수 없음'}</p>
+                {previewResultAssetKey ? (
+                  <>
+                    <p className={styles.label}>Preview path</p>
+                    <p className={styles.advancedPath}>{previewResultAssetKey}</p>
+                  </>
+                ) : null}
                 <section className={styles.advancedGateCard} aria-live="polite">
                   {loading ? (
                     <p className={styles.meta}>상세 상태를 불러오는 중…</p>
