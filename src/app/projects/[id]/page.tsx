@@ -82,6 +82,10 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [uploadReferenceError, setUploadReferenceError] = useState<string | null>(null)
   const [uploadReferenceAssetKey, setUploadReferenceAssetKey] = useState<string | null>(null)
   const [uploadedSourceAssetId, setUploadedSourceAssetId] = useState<string | null>(null)
+  const [deletingUploadedReference, setDeletingUploadedReference] = useState(false)
+  const [deleteUploadedReferenceError, setDeleteUploadedReferenceError] = useState<string | null>(
+    null
+  )
   const [referenceChosenFileLabel, setReferenceChosenFileLabel] = useState('')
 
   const [inputType, setInputType] = useState<'ai' | 'upload'>('upload')
@@ -528,6 +532,47 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
+  async function handleDeleteUploadedReference() {
+    const sourceAssetId = uploadedSourceAssetId?.trim() ?? ''
+    if (!sourceAssetId) return
+    if (!projectId) return
+
+    setDeleteUploadedReferenceError(null)
+
+    if (!confirm('업로드한 파일을 삭제할까요?')) return
+
+    setDeletingUploadedReference(true)
+    try {
+      const response = await fetch(`/api/source/${sourceAssetId}`, { method: 'DELETE' })
+      const body = (await response.json()) as
+        | { ok: true; data: { source_asset_id: string; deleted_asset_key: string } }
+        | { ok: false; error: string; error_detail?: string }
+
+      if (!response.ok || !body.ok) {
+        if (!body.ok && body.error === 'REFERENCE_IN_USE') {
+          setDeleteUploadedReferenceError('현재 처리 중인 작업이 있어 삭제할 수 없습니다.')
+          return
+        }
+        setDeleteUploadedReferenceError(body.ok ? FALLBACK_ERROR_MESSAGE : body.error)
+        return
+      }
+
+      setUploadedSourceAssetId(null)
+      setUploadReferenceAssetKey(null)
+      setReferenceChosenFileLabel('')
+
+      await Promise.all([
+        refreshExecutionContext(projectId),
+        refreshGateStatus(projectId),
+        refreshJobStatus(projectId),
+      ])
+    } catch {
+      setDeleteUploadedReferenceError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setDeletingUploadedReference(false)
+    }
+  }
+
   async function handleActionClick() {
     if (status === 'passed') return
     if (!canRunIdentity || isSubmitting || !projectId) return
@@ -793,6 +838,23 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                   <p className={styles.sourceUploadSuccess} aria-live="polite">
                     업로드 완료:{' '}
                     <span className={styles.sourceUploadKey}>{uploadReferenceAssetKey}</span>
+                  </p>
+                ) : null}
+                {uploadedSourceAssetId && uploadReferenceAssetKey ? (
+                  <div className={styles.sourceDeleteActions}>
+                    <button
+                      type="button"
+                      className={styles.sourceDeleteButton}
+                      disabled={deletingUploadedReference}
+                      onClick={handleDeleteUploadedReference}
+                    >
+                      {deletingUploadedReference ? '삭제 중...' : '업로드 파일 삭제'}
+                    </button>
+                  </div>
+                ) : null}
+                {deleteUploadedReferenceError ? (
+                  <p className={styles.referenceError} role="alert">
+                    {deleteUploadedReferenceError}
                   </p>
                 ) : null}
               </>

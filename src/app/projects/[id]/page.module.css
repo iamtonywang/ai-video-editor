@@ -666,6 +666,38 @@
   color: #111827;
 }
 
+.sourceDeleteActions {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  justify-content: center;
+}
+
+.sourceDeleteButton {
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid rgba(220, 38, 38, 0.5);
+  border-radius: 14px;
+  background: transparent;
+  color: #dc2626;
+  padding: 12px 14px;
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.sourceDeleteButton:hover {
+  border-color: rgba(220, 38, 38, 0.8);
+  background: rgba(220, 38, 38, 0.06);
+}
+
+.sourceDeleteButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .referenceError {
   margin: 0;
   font-size: 14px;
