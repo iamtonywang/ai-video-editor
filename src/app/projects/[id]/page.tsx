@@ -81,6 +81,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   >(null)
   const [uploadReferenceError, setUploadReferenceError] = useState<string | null>(null)
   const [uploadReferenceAssetKey, setUploadReferenceAssetKey] = useState<string | null>(null)
+  const [uploadedSourceAssetId, setUploadedSourceAssetId] = useState<string | null>(null)
   const [referenceChosenFileLabel, setReferenceChosenFileLabel] = useState('')
 
   const [inputType, setInputType] = useState<'ai' | 'upload'>('upload')
@@ -498,7 +499,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       const body = (await response.json()) as {
         ok?: boolean
         error?: string
-        data?: { asset_key?: string }
+        data?: { asset_key?: string; source_asset_id?: string }
       }
 
       if (!response.ok || !body.ok) {
@@ -509,6 +510,10 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
       const key = body.data?.asset_key
       if (key) {
         setUploadReferenceAssetKey(key)
+      }
+      const sourceAssetId = body.data?.source_asset_id
+      if (typeof sourceAssetId === 'string' && sourceAssetId.trim() !== '') {
+        setUploadedSourceAssetId(sourceAssetId.trim())
       }
       if (input) input.value = ''
       await Promise.all([
