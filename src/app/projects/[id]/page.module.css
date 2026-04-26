@@ -235,62 +235,6 @@
   background: #e5e7eb;
 }
 
-.linkCard {
-  width: 100%;
-  max-width: 560px;
-  border: 1px solid #d1d1d1;
-  border-radius: 14px;
-  padding: 16px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.linkPlatformGroup {
-  width: 100%;
-  max-width: 560px;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-}
-
-.linkPlatformButton {
-  width: 100%;
-  border: 1px solid #d1d1d1;
-  border-radius: 14px;
-  background: transparent;
-  color: #111827;
-  padding: 12px 14px;
-  font-size: 15px;
-  line-height: 1.2;
-  font-weight: 600;
-  cursor: pointer;
-  transition: border-color 0.15s ease, background-color 0.15s ease;
-}
-
-.linkPlatformButton:hover {
-  border-color: #b8b8b8;
-  background: rgba(235, 235, 235, 0.45);
-}
-
-.linkPlatformButtonActive {
-  border-color: #9ca3af;
-  background: #e5e7eb;
-}
-
-.linkImportHint {
-  margin: 0;
-  width: 100%;
-  max-width: 560px;
-  font-size: 12px;
-  line-height: 1.45;
-  color: #6b7280;
-  text-align: center;
-}
-
 .promptCard {
   width: 100%;
   max-width: 560px;
@@ -781,16 +725,6 @@
     width: auto;
   }
 
-  .linkPlatformGroup {
-    flex-direction: row;
-    align-items: stretch;
-  }
-
-  .linkPlatformButton {
-    flex: 1;
-    width: auto;
-  }
-
   .page {
     padding-top: 28px;
     padding-bottom: 36px;
@@ -813,10 +747,6 @@
   }
 
   .inputTypeCard {
-    padding: 20px;
-  }
-
-  .linkCard {
     padding: 20px;
   }
 

@@ -36,12 +36,6 @@ type PageProps = {
 
 const FALLBACK_ERROR_MESSAGE = 'Something went wrong.'
 
-const PLATFORM_URLS = {
-  youtube: 'https://www.youtube.com',
-  instagram: 'https://www.instagram.com',
-  tiktok: 'https://www.tiktok.com',
-} as const
-
 function mapApiErrorToUserMessage(code: string | undefined): string {
   switch (code) {
     case 'INVALID_PROJECT_ID':
@@ -89,11 +83,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [uploadReferenceAssetKey, setUploadReferenceAssetKey] = useState<string | null>(null)
   const [referenceChosenFileLabel, setReferenceChosenFileLabel] = useState('')
 
-  const [inputType, setInputType] = useState<'ai' | 'upload' | 'link'>('upload')
-  const [linkPlatform, setLinkPlatform] = useState<'youtube' | 'instagram' | 'tiktok'>(
-    'youtube'
-  )
-  const [linkUrl, setLinkUrl] = useState('')
+  const [inputType, setInputType] = useState<'ai' | 'upload'>('upload')
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const [jobStatusLoading, setJobStatusLoading] = useState(false)
@@ -684,16 +674,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 >
                   파일 업로드
                 </button>
-                <button
-                  type="button"
-                  className={`${styles.inputTypeButton} ${
-                    inputType === 'link' ? styles.inputTypeButtonActive : ''
-                  }`}
-                  aria-pressed={inputType === 'link'}
-                  onClick={() => setInputType('link')}
-                >
-                  링크 입력
-                </button>
               </div>
               {inputType === 'ai' ? (
                 <p className={styles.inputTypeHint}>
@@ -771,72 +751,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                     ) : null}
                   </>
                 ) : null}
-              </section>
-            ) : null}
-
-            {inputType === 'link' ? (
-              <section className={styles.linkCard} aria-label="Link or platform source">
-                <p className={styles.referenceTitle}>링크 입력</p>
-                <div
-                  className={styles.linkPlatformGroup}
-                  role="group"
-                  aria-label="Platform preset"
-                >
-                  <button
-                    type="button"
-                    className={`${styles.linkPlatformButton} ${
-                      linkPlatform === 'youtube' ? styles.linkPlatformButtonActive : ''
-                    }`}
-                    aria-pressed={linkPlatform === 'youtube'}
-                    aria-label="Open YouTube"
-                    onClick={() => {
-                      setLinkPlatform('youtube')
-                      window.open(PLATFORM_URLS.youtube, '_blank', 'noopener,noreferrer')
-                    }}
-                  >
-                    YouTube
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.linkPlatformButton} ${
-                      linkPlatform === 'instagram' ? styles.linkPlatformButtonActive : ''
-                    }`}
-                    aria-pressed={linkPlatform === 'instagram'}
-                    aria-label="Open Instagram"
-                    onClick={() => {
-                      setLinkPlatform('instagram')
-                      window.open(PLATFORM_URLS.instagram, '_blank', 'noopener,noreferrer')
-                    }}
-                  >
-                    Instagram
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.linkPlatformButton} ${
-                      linkPlatform === 'tiktok' ? styles.linkPlatformButtonActive : ''
-                    }`}
-                    aria-pressed={linkPlatform === 'tiktok'}
-                    aria-label="Open TikTok"
-                    onClick={() => {
-                      setLinkPlatform('tiktok')
-                      window.open(PLATFORM_URLS.tiktok, '_blank', 'noopener,noreferrer')
-                    }}
-                  >
-                    TikTok
-                  </button>
-                </div>
-                <input
-                  type="url"
-                  value={linkUrl}
-                  onChange={(e) => setLinkUrl(e.target.value)}
-                  className={styles.referenceInput}
-                  placeholder="영상 URL을 입력하세요"
-                  aria-label="Platform video URL"
-                  spellCheck={false}
-                />
-                <p className={styles.linkImportHint}>
-                  링크 불러오기는 아직 연결되지 않았습니다.
-                </p>
               </section>
             ) : null}
 
