@@ -95,6 +95,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
   const [stoppingJob, setStoppingJob] = useState(false)
   const [stopJobError, setStopJobError] = useState<string | null>(null)
+  const [reconcilingJob, setReconcilingJob] = useState<string | null>(null)
   const [promptAccordionOpen, setPromptAccordionOpen] = useState(false)
   const [previewInstruction, setPreviewInstruction] = useState('')
   const [previewSubmitting, setPreviewSubmitting] = useState(false)
@@ -341,6 +342,14 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     if (s === 'success' || s === 'failed' || s === 'canceled') return false
     return s === 'queued' || s === 'running'
   }, [jobStatus.job?.status, jobStatus.job?.kill_signal])
+
+  const isQueuedTooLong = useMemo(() => {
+    if (!jobStatus.job) return false
+    if (jobStatus.job.status !== 'queued') return false
+    const createdAt = Date.parse(jobStatus.job.created_at || '')
+    if (!Number.isFinite(createdAt)) return false
+    return Date.now() - createdAt > 60000
+  }, [jobStatus.job?.status, jobStatus.job?.created_at])
 
   const previewResultAssetKey = useMemo(() => {
     const job = jobStatus.job
@@ -969,6 +978,38 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                         >
                           {stoppingJob ? 'Stopping...' : 'Stop'}
                         </button>
+                        {isQueuedTooLong === true ? (
+                          <button
+                            type="button"
+                            disabled={reconcilingJob === jobStatus.job?.id}
+                            onClick={async () => {
+                              if (!jobStatus.job?.id) return
+
+                              const confirmed = confirm(
+                                '작업이 멈춘 것 같습니다.\n이 작업을 정리하시겠습니까?'
+                              )
+                              if (!confirmed) return
+
+                              setReconcilingJob(jobStatus.job.id)
+
+                              try {
+                                await fetch(
+                                  `/api/projects/${projectId}/jobs/${jobStatus.job.id}/reconcile`,
+                                  {
+                                    method: 'POST',
+                                  }
+                                )
+                              } catch (e) {
+                                console.error('[RECONCILE_FAILED]', e)
+                              } finally {
+                                setReconcilingJob(null)
+                                await refreshJobStatus(projectId)
+                              }
+                            }}
+                          >
+                            {reconcilingJob === jobStatus.job?.id ? '정리 중...' : '작업 정리'}
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                     {stopJobError ? (
