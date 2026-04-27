@@ -72,7 +72,61 @@ export async function POST(_req: Request, context: RouteContext) {
 
     const queueJob = await jobQueue.getJob(jobId)
     if (!queueJob) {
-      return NextResponse.json({ ok: false, error: 'QUEUE_JOB_NOT_FOUND' }, { status: 409 })
+      const now = new Date().toISOString()
+
+      const { error: reconcileError } = await supabaseAdmin
+        .from('jobs')
+        .update({
+          status: 'canceled',
+          error_code: 'QUEUE_JOB_NOT_FOUND',
+          error_message: 'BullMQ job was not found for queued DB job',
+          finished_at: now,
+          updated_at: now,
+        })
+        .eq('id', jobId)
+        .eq('project_id', projectId)
+
+      if (reconcileError) {
+        return NextResponse.json(
+          { ok: false, error: 'JOB_CANCEL_RECONCILE_FAILED' },
+          { status: 500 }
+        )
+      }
+
+      try {
+        const { error: eventError } = await supabaseAdmin.from('job_events').insert({
+          job_id: jobId,
+          level: 'warn',
+          step: 'queue_job_not_found_reconciled',
+          message: 'Queued DB job canceled because BullMQ job was not found',
+          payload: {
+            project_id: projectId,
+            job_id: jobId,
+            requested_by_user_id: user.id,
+            reason: 'queue_job_not_found',
+          },
+        })
+        if (eventError) {
+          console.warn(
+            'POST /api/projects/[id]/jobs/[jobId]/cancel reconcile job_events insert warning:',
+            eventError.message
+          )
+        }
+      } catch (eventException) {
+        console.warn(
+          'POST /api/projects/[id]/jobs/[jobId]/cancel reconcile job_events insert exception:',
+          eventException
+        )
+      }
+
+      return NextResponse.json({
+        ok: true,
+        data: {
+          job_id: jobId,
+          status: 'canceled',
+          reconciled: true,
+        },
+      })
     }
 
     try {
