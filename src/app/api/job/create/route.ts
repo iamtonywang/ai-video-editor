@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 const ALLOWED_JOB_TYPE = [
   'analyze',
   'build_identity',
+  'render_chunk',
   'preview',
 ]
 
@@ -54,6 +55,13 @@ export async function POST(req: NextRequest) {
       typeof body?.input_mode === 'string' ? body.input_mode.trim() : ''
     const input_mode =
       input_mode_raw === '' ? 'prompt_image' : input_mode_raw
+    const chunk_id_raw = body?.chunk_id
+    const chunk_id =
+      typeof chunk_id_raw === 'string'
+        ? chunk_id_raw.trim()
+        : chunk_id_raw != null
+          ? String(chunk_id_raw).trim()
+          : ''
 
     if (!project_id || !job_type) {
       return NextResponse.json(
@@ -88,6 +96,78 @@ export async function POST(req: NextRequest) {
         { ok: false, error: 'PROJECT_NOT_FOUND' },
         { status: 404 }
       )
+    }
+
+    let renderChunkContext:
+      | null
+      | { chunk_id: string; scene_id: string; sequence_id: string; project_id: string; render_status: string | null } =
+      null
+
+    if (job_type === 'render_chunk') {
+      if (!chunk_id) {
+        return NextResponse.json({ ok: false, error: 'CHUNK_ID_REQUIRED' }, { status: 400 })
+      }
+      if (!isValidUuid(chunk_id)) {
+        return NextResponse.json({ ok: false, error: 'INVALID_CHUNK_ID' }, { status: 400 })
+      }
+
+      const chunkRow = await supabaseAdmin
+        .from('sequence_chunks')
+        .select('id, scene_id, render_status')
+        .eq('id', chunk_id)
+        .maybeSingle()
+      if (chunkRow.error) {
+        return NextResponse.json({ ok: false, error: chunkRow.error.message }, { status: 500 })
+      }
+      if (!chunkRow.data?.id || !chunkRow.data.scene_id) {
+        return NextResponse.json({ ok: false, error: 'CHUNK_NOT_FOUND' }, { status: 404 })
+      }
+
+      const sceneRow = await supabaseAdmin
+        .from('sequence_scenes')
+        .select('id, sequence_id')
+        .eq('id', String(chunkRow.data.scene_id))
+        .maybeSingle()
+      if (sceneRow.error) {
+        return NextResponse.json({ ok: false, error: sceneRow.error.message }, { status: 500 })
+      }
+      if (!sceneRow.data?.sequence_id) {
+        return NextResponse.json({ ok: false, error: 'SCENE_NOT_FOUND' }, { status: 404 })
+      }
+
+      const seqRow = await supabaseAdmin
+        .from('sequences')
+        .select('id, project_id')
+        .eq('id', String(sceneRow.data.sequence_id))
+        .maybeSingle()
+      if (seqRow.error) {
+        return NextResponse.json({ ok: false, error: seqRow.error.message }, { status: 500 })
+      }
+      const resolvedProjectId = String(seqRow.data?.project_id ?? '').trim()
+      if (!resolvedProjectId) {
+        return NextResponse.json({ ok: false, error: 'SEQUENCE_NOT_FOUND' }, { status: 404 })
+      }
+
+      if (resolvedProjectId !== String(project_id)) {
+        return NextResponse.json({ ok: false, error: 'CHUNK_PROJECT_MISMATCH' }, { status: 403 })
+      }
+
+      renderChunkContext = {
+        chunk_id: String(chunkRow.data.id),
+        scene_id: String(chunkRow.data.scene_id),
+        sequence_id: String(sceneRow.data.sequence_id),
+        project_id: resolvedProjectId,
+        render_status:
+          chunkRow.data.render_status == null ? null : String(chunkRow.data.render_status).trim(),
+      }
+
+      const s = renderChunkContext.render_status ?? ''
+      if (s === 'queued' || s === 'running' || s === 'rendered' || s === 'approved') {
+        return NextResponse.json(
+          { ok: false, error: 'CHUNK_ALREADY_RENDERED_OR_RUNNING', render_status: s },
+          { status: 409 }
+        )
+      }
     }
 
     const { data: dupRow, error: dupError } = await supabaseAdmin
@@ -228,6 +308,20 @@ export async function POST(req: NextRequest) {
 
     const costSnapshot = getMvpJobCostPolicy(job_type)
 
+    let previousChunkRenderStatus: string | null = null
+    if (job_type === 'render_chunk' && renderChunkContext) {
+      previousChunkRenderStatus = renderChunkContext.render_status ?? null
+      const updateChunkQueued = await supabaseAdmin
+        .from('sequence_chunks')
+        .update({ render_status: 'queued' })
+        .eq('id', renderChunkContext.chunk_id)
+        .select('id')
+        .maybeSingle()
+      if (updateChunkQueued.error) {
+        return NextResponse.json({ ok: false, error: 'CHUNK_STATUS_UPDATE_FAILED' }, { status: 500 })
+      }
+    }
+
     const { data, error } = await supabaseAdmin
       .from('jobs')
       .insert({
@@ -296,6 +390,12 @@ export async function POST(req: NextRequest) {
                       ? null
                       : String(reference_asset_id).trim(),
               }
+            : job_type === 'render_chunk'
+              ? {
+                  job_id: data.id,
+                  project_id,
+                  chunk_id: chunk_id,
+                }
             : {
                 job_id: data.id,
                 project_id,
@@ -330,6 +430,48 @@ export async function POST(req: NextRequest) {
         console.warn('POST /api/job/create enqueue failure fix exception:', fixException)
       }
 
+      if (job_type === 'render_chunk' && renderChunkContext) {
+        try {
+          const fixChunk = await supabaseAdmin
+            .from('sequence_chunks')
+            .update({ render_status: 'failed' })
+            .eq('id', renderChunkContext.chunk_id)
+          if (fixChunk.error) {
+            console.warn('POST /api/job/create enqueue failure chunk fix warning:', fixChunk.error.message)
+          }
+        } catch (chunkFixException) {
+          console.warn('POST /api/job/create enqueue failure chunk fix exception:', chunkFixException)
+        }
+
+        try {
+          const { error: chunkEventError } = await supabaseAdmin.from('job_events').insert({
+            job_id: data.id,
+            level: 'error',
+            step: 'render_chunk_enqueue_failed',
+            message: 'Failed to enqueue render_chunk job',
+            payload: {
+              chunk_id: renderChunkContext.chunk_id,
+              previous_render_status: previousChunkRenderStatus,
+              attempted_render_status: 'queued',
+              error: errorDetail,
+              job_type,
+              project_id,
+            },
+          })
+          if (chunkEventError) {
+            console.warn(
+              'POST /api/job/create render_chunk_enqueue_failed job_events insert warning:',
+              chunkEventError.message
+            )
+          }
+        } catch (eventException) {
+          console.warn(
+            'POST /api/job/create render_chunk_enqueue_failed job_events insert exception:',
+            eventException
+          )
+        }
+      }
+
       try {
         const { error: eventError } = await supabaseAdmin.from('job_events').insert({
           job_id: data.id,
@@ -340,6 +482,7 @@ export async function POST(req: NextRequest) {
             error: errorDetail,
             job_type,
             project_id,
+            ...(job_type === 'render_chunk' ? { chunk_id } : {}),
           },
         })
         if (eventError) {

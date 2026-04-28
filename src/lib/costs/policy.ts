@@ -3,7 +3,7 @@
  * not KRW/USD or any fiat currency.
  */
 
-export type MvpCostJobType = 'analyze' | 'build_identity' | 'preview'
+export type MvpCostJobType = 'analyze' | 'build_identity' | 'preview' | 'render_chunk'
 
 export type MvpJobCostPolicy = {
   cost_estimate: number
@@ -43,10 +43,24 @@ const MVP_POLICIES: Record<MvpCostJobType, MvpJobCostPolicy> = {
     budget_precheck_status: 'passed',
     budget_precheck_reason: 'MVP_STATIC_POLICY',
   },
+  render_chunk: {
+    cost_estimate: 0.04,
+    cost_accumulated: 0,
+    soft_cost_limit: 0.15,
+    hard_cost_limit: 0.30,
+    estimated_cost_preflight: 0.04,
+    budget_precheck_status: 'passed',
+    budget_precheck_reason: 'MVP_STATIC_POLICY',
+  },
 }
 
 export function getMvpJobCostPolicy(jobType: string): MvpJobCostPolicy {
-  if (jobType === 'analyze' || jobType === 'build_identity' || jobType === 'preview') {
+  if (
+    jobType === 'analyze' ||
+    jobType === 'build_identity' ||
+    jobType === 'preview' ||
+    jobType === 'render_chunk'
+  ) {
     return MVP_POLICIES[jobType]
   }
   throw new Error('UNSUPPORTED_COST_POLICY_JOB_TYPE')

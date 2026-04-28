@@ -33,8 +33,18 @@ type PreviewPayload = {
   reference_asset_id?: string | null
 }
 
+type RenderChunkPayload = {
+  job_id: string
+  project_id: string
+  chunk_id: string
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'UNKNOWN_ERROR'
+}
+
+function isValidUuid(v: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
 }
 
 type AnalyzeJobStatus = 'running' | 'success' | 'failed'
@@ -1252,6 +1262,358 @@ async function handlePreviewJob(payload: PreviewPayload) {
   })
 }
 
+async function renderChunkDummyWebp(params: {
+  projectId: string
+  chunkId: string
+}): Promise<Buffer> {
+  const { projectId, chunkId } = params
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="960" height="540" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100%" height="100%" fill="#0b1220"/>
+  <text x="48" y="76" font-family="system-ui, Segoe UI, sans-serif" font-size="28" font-weight="700" fill="#f9fafb">Dummy render_chunk</text>
+  <text x="48" y="128" font-family="system-ui, Segoe UI, sans-serif" font-size="16" fill="#e5e7eb">project: ${escapeXml(projectId)}</text>
+  <text x="48" y="160" font-family="system-ui, Segoe UI, sans-serif" font-size="16" fill="#e5e7eb">chunk: ${escapeXml(chunkId)}</text>
+  <text x="48" y="510" font-family="system-ui, Segoe UI, sans-serif" font-size="14" fill="rgba(255,255,255,0.75)">GPU not connected • deterministic placeholder</text>
+</svg>`
+  return sharp(Buffer.from(svg, 'utf8')).webp({ quality: 82 }).toBuffer()
+}
+
+async function handleRenderChunkJob(payload: RenderChunkPayload) {
+  const now = new Date().toISOString()
+  const jobId = payload.job_id
+  const projectId = payload.project_id
+  const chunkId = payload.chunk_id
+
+  if (await shouldSkipTerminalJob(jobId, 'render_chunk')) return
+
+  await addJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_received',
+    message: 'Render chunk job received',
+    payload: { project_id: projectId, chunk_id: chunkId },
+  })
+
+  if (!chunkId || !isValidUuid(chunkId)) {
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_INPUT_INVALID',
+      error_message: 'chunk_id is missing or invalid',
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_input_invalid',
+      message: 'chunk_id is missing or invalid',
+      payload: { project_id: projectId, chunk_id: chunkId },
+    })
+    return
+  }
+
+  const chunkRow = await supabaseServer
+    .from('sequence_chunks')
+    .select('id, scene_id, render_status')
+    .eq('id', chunkId)
+    .maybeSingle()
+
+  if (chunkRow.error || !chunkRow.data?.id || !chunkRow.data.scene_id) {
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_NOT_FOUND',
+      error_message: chunkRow.error ? chunkRow.error.message : 'chunk not found',
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_not_found',
+      message: 'Chunk not found or unreadable',
+      payload: { project_id: projectId, chunk_id: chunkId },
+    })
+    return
+  }
+
+  const sceneRow = await supabaseServer
+    .from('sequence_scenes')
+    .select('id, sequence_id')
+    .eq('id', String(chunkRow.data.scene_id))
+    .maybeSingle()
+  if (sceneRow.error || !sceneRow.data?.sequence_id) {
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_NOT_FOUND',
+      error_message: sceneRow.error ? sceneRow.error.message : 'scene not found',
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_not_found',
+      message: 'Scene for chunk not found or unreadable',
+      payload: { project_id: projectId, chunk_id: chunkId },
+    })
+    return
+  }
+
+  const seqRow = await supabaseServer
+    .from('sequences')
+    .select('id, project_id')
+    .eq('id', String(sceneRow.data.sequence_id))
+    .maybeSingle()
+  const resolvedProjectId = String(seqRow.data?.project_id ?? '').trim()
+  if (seqRow.error || !resolvedProjectId || resolvedProjectId !== projectId) {
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_NOT_FOUND',
+      error_message: seqRow.error
+        ? seqRow.error.message
+        : !resolvedProjectId
+          ? 'sequence not found'
+          : 'chunk project mismatch',
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_not_found',
+      message: 'Sequence not found or project mismatch',
+      payload: { project_id: projectId, chunk_id: chunkId, resolved_project_id: resolvedProjectId },
+    })
+    return
+  }
+
+  const transition = await supabaseServer
+    .from('sequence_chunks')
+    .update({ render_status: 'running' })
+    .eq('id', chunkId)
+    .eq('render_status', 'queued')
+    .select('id')
+    .maybeSingle()
+
+  if (transition.error) {
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_STATE_TRANSITION_FAILED',
+      error_message: transition.error.message,
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_state_transition_failed',
+      message: transition.error.message,
+      payload: { project_id: projectId, chunk_id: chunkId },
+    })
+    return
+  }
+
+  if (!transition.data?.id) {
+    const recheck = await supabaseServer
+      .from('sequence_chunks')
+      .select('render_status')
+      .eq('id', chunkId)
+      .maybeSingle()
+    const s = String(recheck.data?.render_status ?? '').trim()
+    const finished = new Date().toISOString()
+    if (s === 'running' || s === 'rendered' || s === 'approved') {
+      const step =
+        s === 'running'
+          ? 'render_chunk_skip_already_running'
+          : s === 'rendered'
+            ? 'render_chunk_skip_already_rendered'
+            : 'render_chunk_skip_already_approved'
+      await updateAnalyzeJobStatus({
+        job_id: jobId,
+        status: 'success',
+        progress: 100,
+        started_at: now,
+        finished_at: finished,
+        error_code: null,
+        error_message: null,
+        output_asset_key: null,
+      })
+      await markCostSuccess(jobId)
+      await addJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step,
+        message: `Chunk already ${s}, skipping`,
+        payload: { project_id: projectId, chunk_id: chunkId, render_status: s },
+      })
+      return
+    }
+
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_STATE_TRANSITION_FAILED',
+      error_message: `unexpected_chunk_status:${s || 'unknown'}`,
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_state_transition_failed',
+      message: 'Chunk status transition failed',
+      payload: { project_id: projectId, chunk_id: chunkId, render_status: s || null },
+    })
+    return
+  }
+
+  await updateAnalyzeJobStatus({
+    job_id: jobId,
+    status: 'running',
+    progress: 5,
+    started_at: now,
+    error_code: null,
+    error_message: null,
+    output_asset_key: null,
+  })
+  await markCostRunning(jobId)
+  await addJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_started',
+    message: 'Render chunk started',
+    payload: { project_id: projectId, chunk_id: chunkId },
+  })
+
+  const outputPath = `projects/${projectId}/chunks/${chunkId}/render.webp`
+  let webpBuffer: Buffer
+  try {
+    webpBuffer = await renderChunkDummyWebp({ projectId, chunkId })
+  } catch (err) {
+    const msg = getErrorMessage(err)
+    await supabaseServer.from('sequence_chunks').update({ render_status: 'failed' }).eq('id', chunkId)
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_FAILED',
+      error_message: msg,
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_failed',
+      message: msg,
+      payload: { project_id: projectId, chunk_id: chunkId },
+    })
+    return
+  }
+
+  const upload = await supabaseServer.storage.from('project-media').upload(outputPath, webpBuffer, {
+    contentType: 'image/webp',
+    upsert: false,
+  })
+  if (upload.error) {
+    await supabaseServer.from('sequence_chunks').update({ render_status: 'failed' }).eq('id', chunkId)
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 10,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'RENDER_CHUNK_UPLOAD_FAILED',
+      error_message: upload.error.message,
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'render_chunk_upload_failed',
+      message: upload.error.message,
+      payload: { project_id: projectId, chunk_id: chunkId, path: outputPath },
+    })
+    return
+  }
+
+  await supabaseServer.from('sequence_chunks').update({ render_status: 'rendered' }).eq('id', chunkId)
+
+  const outKeyUpdate = await supabaseServer
+    .from('sequence_chunks')
+    .update({ output_asset_key: outputPath } as Record<string, unknown>)
+    .eq('id', chunkId)
+  if (outKeyUpdate.error) {
+    await addJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'render_chunk_output_key_update_skipped',
+      message: `sequence_chunks.output_asset_key update skipped: ${outKeyUpdate.error.message}`,
+      payload: { project_id: projectId, chunk_id: chunkId, path: outputPath },
+    })
+  }
+
+  const finished = new Date().toISOString()
+  await updateAnalyzeJobStatus({
+    job_id: jobId,
+    status: 'success',
+    progress: 100,
+    started_at: now,
+    finished_at: finished,
+    error_code: null,
+    error_message: null,
+    output_asset_key: outputPath,
+  })
+  await markCostSuccess(jobId)
+  await addJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_uploaded',
+    message: 'Render chunk uploaded',
+    payload: { project_id: projectId, chunk_id: chunkId, path: outputPath, byte_length: webpBuffer.length },
+  })
+  await addJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_completed',
+    message: 'Render chunk completed',
+    payload: { project_id: projectId, chunk_id: chunkId, path: outputPath },
+  })
+}
+
 const worker = new Worker(
   'job-queue',
   async (job) => {
@@ -1274,6 +1636,16 @@ const worker = new Worker(
           instruction_length: p.instruction?.length ?? 0,
         })
         await handlePreviewJob(p)
+        break
+      }
+      case QUEUE_NAMES.RENDER_CHUNK: {
+        const p = payload as RenderChunkPayload
+        console.log('RENDER_CHUNK job received', {
+          job_id: p.job_id,
+          project_id: p.project_id,
+          chunk_id: p.chunk_id,
+        })
+        await handleRenderChunkJob(p)
         break
       }
 
