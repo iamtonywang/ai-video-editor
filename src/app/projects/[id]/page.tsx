@@ -95,6 +95,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [jobStatusError, setJobStatusError] = useState<string | null>(null)
   const [stoppingJob, setStoppingJob] = useState(false)
   const [stopJobError, setStopJobError] = useState<string | null>(null)
+  const [reconcilingJob, setReconcilingJob] = useState<string | null>(null)
   const [promptAccordionOpen, setPromptAccordionOpen] = useState(false)
   const [previewInstruction, setPreviewInstruction] = useState('')
   const [previewSubmitting, setPreviewSubmitting] = useState(false)
@@ -408,6 +409,21 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     jobStatus.latest_event?.step,
   ])
 
+  const isRunningStalled = useMemo(() => {
+    if (!jobStatus.job) return false
+    if (jobStatus.job.status !== 'running') return false
+    if (jobStatus.job.kill_signal === true) return false
+
+    const eventTs = Date.parse(jobStatus.latest_event?.event_ts || '')
+    if (!Number.isFinite(eventTs)) return false
+
+    return Date.now() - eventTs > 180000
+  }, [
+    jobStatus.job?.status,
+    jobStatus.job?.kill_signal,
+    jobStatus.latest_event?.event_ts,
+  ])
+
   const [deletingPreviewResult, setDeletingPreviewResult] = useState(false)
   const [deletePreviewResultError, setDeletePreviewResultError] = useState<string | null>(null)
 
@@ -706,6 +722,47 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
+  async function handleReconcileStalledJob() {
+    const jobId = jobStatus.job?.id ?? ''
+    if (!projectId || !jobId) return
+    if (reconcilingJob === jobId) return
+
+    if (
+      !confirm('작업이 오래 멈춘 것 같습니다.\n이 작업을 정리하시겠습니까?')
+    ) {
+      return
+    }
+
+    setReconcilingJob(jobId)
+    try {
+      await refreshJobStatus(projectId)
+
+      try {
+        const check = await fetch(`/api/projects/${projectId}/job-status`, {
+          method: 'GET',
+          cache: 'no-store',
+        })
+        const body = (await check.json()) as
+          | { ok: true; data: { job: null | { id: string; status: string } } }
+          | { ok: false; error: string }
+        if (!check.ok || !body.ok) return
+        if (!body.data.job || body.data.job.id !== jobId) return
+        if (body.data.job.status !== 'running') return
+      } catch {
+        // If we can't re-check, let the server handle validation.
+      }
+
+      await fetch(`/api/projects/${projectId}/jobs/${jobId}/reconcile`, {
+        method: 'POST',
+      })
+    } catch (e) {
+      console.error('[RECONCILE_FAILED]', e)
+    } finally {
+      setReconcilingJob(null)
+      await refreshJobStatus(projectId)
+    }
+  }
+
   async function handleRunPreview() {
     setPreviewValidationError(null)
     setPreviewSubmitError(null)
@@ -987,10 +1044,29 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                         {latestEventText}
                       </p>
                     ) : null}
+                    {isRunningStalled ? (
+                      <p className={styles.metaHint} aria-live="polite">
+                        작업이 오래 진행 중입니다. 문제가 지속되면 작업을 정리한 뒤 다시 시도할 수 있습니다.
+                      </p>
+                    ) : null}
                     {jobStatus.job.status === 'failed' ? (
                       <p className={styles.referenceError} role="alert">
                         생성에 실패했습니다. 다시 시도해주세요.
                       </p>
+                    ) : null}
+                    {isRunningStalled && jobStatus.job.id ? (
+                      <div className={styles.jobActions}>
+                        <button
+                          type="button"
+                          className={styles.stopButton}
+                          disabled={
+                            reconcilingJob === jobStatus.job?.id || !jobStatus.job?.id
+                          }
+                          onClick={handleReconcileStalledJob}
+                        >
+                          {reconcilingJob === jobStatus.job?.id ? '정리 중...' : '작업 정리'}
+                        </button>
+                      </div>
                     ) : null}
                     {stopButtonVisible ? (
                       <div className={styles.jobActions}>
