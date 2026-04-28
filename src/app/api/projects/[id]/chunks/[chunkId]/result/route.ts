@@ -3,7 +3,7 @@ import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
 type RouteContext = {
-  params: Promise<{ projectId?: string; chunkId?: string }>
+  params: Promise<{ id?: string; chunkId?: string }>
 }
 
 function isValidUuid(v: string): boolean {
@@ -22,7 +22,7 @@ export async function GET(_req: Request, context: RouteContext) {
     }
 
     const resolved = await context.params
-    const projectId = typeof resolved?.projectId === 'string' ? resolved.projectId.trim() : ''
+    const projectId = typeof resolved?.id === 'string' ? resolved.id.trim() : ''
     const chunkId = typeof resolved?.chunkId === 'string' ? resolved.chunkId.trim() : ''
 
     if (!projectId || !chunkId || !isValidUuid(projectId) || !isValidUuid(chunkId)) {
@@ -175,7 +175,7 @@ export async function GET(_req: Request, context: RouteContext) {
       result_url,
     })
   } catch (error) {
-    console.error('GET /api/projects/[projectId]/chunks/[chunkId]/result error:', error)
+    console.error('GET /api/projects/[id]/chunks/[chunkId]/result error:', error)
     const detail = error instanceof Error ? error.message : 'UNKNOWN_ERROR'
     return NextResponse.json(
       { ok: false, error: 'INVALID_REQUEST', error_detail: detail },
