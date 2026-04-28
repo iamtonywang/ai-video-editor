@@ -382,16 +382,28 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
 
   const latestEventText = useMemo(() => {
     if (!jobStatus.job) return ''
+    if (jobStatus.job.kill_signal === true) return ''
 
     const s = jobStatus.job.status
     if (s === 'failed' || s === 'canceled') return ''
-    if (s !== 'queued' && s !== 'running' && s !== 'success') return ''
 
-    return (
+    const eventText =
       jobStatus.latest_event?.message ?? jobStatus.latest_event?.step ?? ''
-    )
+
+    if (eventText) return eventText
+
+    if (s === 'queued') {
+      return '작업 대기열에 등록되었습니다. 곧 시작됩니다.'
+    }
+
+    if (s === 'running') {
+      return '작업을 시작하는 중입니다.'
+    }
+
+    return ''
   }, [
     jobStatus.job?.status,
+    jobStatus.job?.kill_signal,
     jobStatus.latest_event?.message,
     jobStatus.latest_event?.step,
   ])
