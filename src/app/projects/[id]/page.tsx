@@ -384,7 +384,8 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     if (!jobStatus.job) return ''
 
     const s = jobStatus.job.status
-    if (s !== 'queued' && s !== 'running') return ''
+    if (s === 'failed' || s === 'canceled') return ''
+    if (s !== 'queued' && s !== 'running' && s !== 'success') return ''
 
     return (
       jobStatus.latest_event?.message ?? jobStatus.latest_event?.step ?? ''
