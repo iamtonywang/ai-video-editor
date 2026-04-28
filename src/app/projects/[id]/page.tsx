@@ -380,6 +380,21 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     return s ? s : '-'
   }, [jobStatus.job?.status, jobStatus.job?.kill_signal])
 
+  const latestEventText = useMemo(() => {
+    if (!jobStatus.job) return ''
+
+    const s = jobStatus.job.status
+    if (s !== 'queued' && s !== 'running') return ''
+
+    return (
+      jobStatus.latest_event?.message ?? jobStatus.latest_event?.step ?? ''
+    )
+  }, [
+    jobStatus.job?.status,
+    jobStatus.latest_event?.message,
+    jobStatus.latest_event?.step,
+  ])
+
   const [deletingPreviewResult, setDeletingPreviewResult] = useState(false)
   const [deletePreviewResultError, setDeletePreviewResultError] = useState<string | null>(null)
 
@@ -952,6 +967,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                       previewResultAssetKey === null) ? (
                       <p className={styles.progressStatus} aria-live="polite">
                         {progressLabel}
+                      </p>
+                    ) : null}
+                    {latestEventText ? (
+                      <p className={styles.metaHint} aria-live="polite">
+                        {latestEventText}
                       </p>
                     ) : null}
                     {jobStatus.job.status === 'failed' ? (
