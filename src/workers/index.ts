@@ -792,6 +792,53 @@ async function renderPreviewWebp(instruction: string): Promise<Buffer> {
   return sharp(Buffer.from(svg, 'utf8')).webp({ quality: 82 }).toBuffer()
 }
 
+const IMAGE_REMIX_OVERLAY_MAX = 140
+
+async function remixReferenceImageToWebp(input: {
+  referenceBuffer: Buffer
+  instruction: string
+  projectId: string
+  jobId: string
+}): Promise<{ webpBuffer: Buffer; usedFallback: boolean }> {
+  const { referenceBuffer, instruction } = input
+
+  // Provider hook boundary (not implemented in this stage).
+  const provider = (process.env.IMAGE_REMIX_PROVIDER ?? '').trim()
+  const apiKey = (process.env.IMAGE_REMIX_API_KEY ?? '').trim()
+  void provider
+  void apiKey
+
+  // Deterministic fallback renderer: preserve original image, only add a small overlay label.
+  const overlayTextRaw = instruction.trim()
+  const overlayText = overlayTextRaw
+    ? overlayTextRaw.slice(0, IMAGE_REMIX_OVERLAY_MAX)
+    : 'image_remix (fallback)'
+
+  const overlaySvg = `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="960" height="540" xmlns="http://www.w3.org/2000/svg">
+  <rect x="24" y="492" width="912" height="36" rx="10" fill="rgba(0,0,0,0.55)"/>
+  <text x="44" y="516" font-family="system-ui, Segoe UI, sans-serif" font-size="16" fill="#ffffff">
+    ${escapeXml(overlayText)}
+  </text>
+  <text x="760" y="516" font-family="system-ui, Segoe UI, sans-serif" font-size="14" fill="rgba(255,255,255,0.85)">
+    fallback
+  </text>
+</svg>`
+
+  const base = sharp(referenceBuffer, { failOn: 'none' })
+    .rotate()
+    .resize(960, 540, { fit: 'cover' })
+
+  const overlayPng = await sharp(Buffer.from(overlaySvg, 'utf8')).png().toBuffer()
+
+  const webpBuffer = await base
+    .composite([{ input: overlayPng, top: 0, left: 0 }])
+    .webp({ quality: 82 })
+    .toBuffer()
+
+  return { webpBuffer, usedFallback: true }
+}
+
 async function handlePreviewJob(payload: PreviewPayload) {
   const now = new Date().toISOString()
   const jobId = payload.job_id
@@ -894,7 +941,7 @@ async function handlePreviewJob(payload: PreviewPayload) {
       job_id: jobId,
       level: 'info',
       step: 'image_remix_preview_started',
-      message: 'Temporary fallback preview renderer (non-AI). Reference is not applied yet.',
+      message: 'Image remix preview started',
       payload: {
         job_id: jobId,
         project_id: projectId,
@@ -908,17 +955,197 @@ async function handlePreviewJob(payload: PreviewPayload) {
 
   let webpBuffer: Buffer
   try {
-    webpBuffer = await renderPreviewWebp(payload.instruction ?? '')
+    if (inputMode === 'image_remix') {
+      const refLookup = await supabaseServer
+        .from('source_assets')
+        .select('id, asset_key, asset_type, asset_status, validation_status')
+        .eq('id', referenceAssetId)
+        .eq('project_id', projectId)
+        .eq('asset_type', 'reference')
+        .or('validation_status.eq.validated,asset_status.eq.validated,asset_status.eq.active')
+        .maybeSingle()
+
+      if (refLookup.error) {
+        const msg = `source_assets_read_failed: ${refLookup.error.message}`
+        const finished = new Date().toISOString()
+        await updateAnalyzeJobStatus({
+          job_id: jobId,
+          status: 'failed',
+          progress: 5,
+          started_at: now,
+          finished_at: finished,
+          error_code: 'REFERENCE_ASSET_NOT_AVAILABLE',
+          error_message: msg,
+          output_asset_key: null,
+        })
+        await markCostFailed(jobId)
+        await addJobEvent({
+          job_id: jobId,
+          level: 'error',
+          step: 'image_remix_reference_not_available',
+          message: msg,
+          payload: {
+            input_mode: inputMode,
+            reference_asset_id: referenceAssetId,
+          },
+        })
+        return
+      }
+
+      if (!refLookup.data?.id) {
+        const msg = 'Reference asset is not available for remix'
+        const finished = new Date().toISOString()
+        await updateAnalyzeJobStatus({
+          job_id: jobId,
+          status: 'failed',
+          progress: 5,
+          started_at: now,
+          finished_at: finished,
+          error_code: 'REFERENCE_ASSET_NOT_AVAILABLE',
+          error_message: msg,
+          output_asset_key: null,
+        })
+        await markCostFailed(jobId)
+        await addJobEvent({
+          job_id: jobId,
+          level: 'error',
+          step: 'image_remix_reference_not_available',
+          message: msg,
+          payload: {
+            input_mode: inputMode,
+            reference_asset_id: referenceAssetId,
+          },
+        })
+        return
+      }
+
+      const assetKey =
+        refLookup.data.asset_key == null ? '' : String(refLookup.data.asset_key).trim()
+      const expectedPrefix = `projects/${projectId}/references/`
+      if (!assetKey || !assetKey.startsWith(expectedPrefix)) {
+        const msg = 'Reference asset key is not a supported project-media reference path'
+        const finished = new Date().toISOString()
+        await updateAnalyzeJobStatus({
+          job_id: jobId,
+          status: 'failed',
+          progress: 5,
+          started_at: now,
+          finished_at: finished,
+          error_code: 'REFERENCE_ASSET_KEY_UNSUPPORTED',
+          error_message: msg,
+          output_asset_key: null,
+        })
+        await markCostFailed(jobId)
+        await addJobEvent({
+          job_id: jobId,
+          level: 'error',
+          step: 'image_remix_reference_key_unsupported',
+          message: msg,
+          payload: {
+            input_mode: inputMode,
+            reference_asset_id: referenceAssetId,
+            asset_key: assetKey,
+          },
+        })
+        return
+      }
+
+      const dl = await supabaseServer.storage.from('project-media').download(assetKey)
+      if (dl.error || !dl.data) {
+        const msg = `storage_download_failed: ${dl.error?.message ?? 'NO_FILE_DATA'}`
+        const finished = new Date().toISOString()
+        await updateAnalyzeJobStatus({
+          job_id: jobId,
+          status: 'failed',
+          progress: 5,
+          started_at: now,
+          finished_at: finished,
+          error_code: 'REFERENCE_ASSET_DOWNLOAD_FAILED',
+          error_message: msg,
+          output_asset_key: null,
+        })
+        await markCostFailed(jobId)
+        await addJobEvent({
+          job_id: jobId,
+          level: 'error',
+          step: 'image_remix_reference_download_failed',
+          message: msg,
+          payload: {
+            input_mode: inputMode,
+            reference_asset_id: referenceAssetId,
+            asset_key: assetKey,
+          },
+        })
+        return
+      }
+
+      const arrayBuffer = await dl.data.arrayBuffer()
+      const referenceBuffer = Buffer.from(arrayBuffer)
+      await addJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'image_remix_reference_downloaded',
+        message: 'Reference image downloaded',
+        payload: {
+          input_mode: inputMode,
+          reference_asset_id: referenceAssetId,
+          asset_key: assetKey,
+          byte_length: referenceBuffer.length,
+          instruction_length: instructionLength,
+        },
+      })
+
+      const remix = await remixReferenceImageToWebp({
+        referenceBuffer,
+        instruction: payload.instruction ?? '',
+        projectId,
+        jobId,
+      })
+
+      if (remix.usedFallback) {
+        await addJobEvent({
+          job_id: jobId,
+          level: 'info',
+          step: 'image_remix_provider_fallback_used',
+          message: 'External provider not configured or not implemented. Fallback renderer used.',
+          payload: {
+            input_mode: inputMode,
+            reference_asset_id: referenceAssetId,
+            asset_key: assetKey,
+            instruction_length: instructionLength,
+          },
+        })
+      }
+
+      webpBuffer = remix.webpBuffer
+
+      await addJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'image_remix_render_completed',
+        message: 'Image remix render completed',
+        payload: {
+          input_mode: inputMode,
+          reference_asset_id: referenceAssetId,
+          asset_key: assetKey,
+          byte_length: webpBuffer.length,
+          instruction_length: instructionLength,
+        },
+      })
+    } else {
+      webpBuffer = await renderPreviewWebp(payload.instruction ?? '')
+    }
   } catch (renderErr) {
     const msg = getErrorMessage(renderErr)
     const finished = new Date().toISOString()
+    const code = inputMode === 'image_remix' ? 'IMAGE_REMIX_RENDER_FAILED' : 'PREVIEW_RENDER_FAILED'
     await updateAnalyzeJobStatus({
       job_id: jobId,
       status: 'failed',
       progress: 5,
       started_at: now,
       finished_at: finished,
-      error_code: 'PREVIEW_RENDER_FAILED',
+      error_code: code,
       error_message: msg,
       output_asset_key: null,
     })
@@ -926,13 +1153,15 @@ async function handlePreviewJob(payload: PreviewPayload) {
     await addJobEvent({
       job_id: jobId,
       level: 'error',
-      step: 'preview_render_failed',
+      step: inputMode === 'image_remix' ? 'image_remix_render_failed' : 'preview_render_failed',
       message: msg,
       payload: {
         job_id: jobId,
         project_id: projectId,
         job_type: 'preview',
-        error_code: 'PREVIEW_RENDER_FAILED',
+        error_code: code,
+        input_mode: inputMode,
+        reference_asset_id: referenceAssetId,
       },
     })
     throw renderErr
