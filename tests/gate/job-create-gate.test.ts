@@ -93,9 +93,17 @@ async function countJobs(projectId: string): Promise<number> {
   return count ?? 0
 }
 
+type JobCreateResponseBody =
+  | {
+      ok?: boolean
+      error?: string
+      data?: { job_id?: string }
+    }
+  | null
+
 async function createAnalyzeJob(projectId: string): Promise<{
   status: number
-  body: any
+  body: JobCreateResponseBody
 }> {
   const response = await fetch(`${baseUrl}/api/job/create`, {
     method: 'POST',
@@ -107,8 +115,8 @@ async function createAnalyzeJob(projectId: string): Promise<{
     }),
   })
 
-  const body = await response.json()
-  return { status: response.status, body }
+  const raw = (await response.json()) as unknown
+  return { status: response.status, body: raw as JobCreateResponseBody }
 }
 
 async function hasQueueEntryForProject(projectId: string): Promise<boolean> {

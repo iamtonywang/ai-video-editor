@@ -11,6 +11,11 @@ const ALLOWED_JOB_TYPE = [
 ]
 
 const ALLOWED_IDENTITY_STATUS = ['building', 'ready', 'failed', 'stale']
+const ALLOWED_PREVIEW_INPUT_MODE = ['prompt_image', 'image_remix'] as const
+
+function isValidUuid(v: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,6 +50,10 @@ export async function POST(req: NextRequest) {
       typeof body?.build_score === 'number' ? body.build_score : undefined
     const instruction =
       typeof body?.instruction === 'string' ? body.instruction.trim() : ''
+    const input_mode_raw =
+      typeof body?.input_mode === 'string' ? body.input_mode.trim() : ''
+    const input_mode =
+      input_mode_raw === '' ? 'prompt_image' : input_mode_raw
 
     if (!project_id || !job_type) {
       return NextResponse.json(
@@ -156,11 +165,64 @@ export async function POST(req: NextRequest) {
     }
 
     if (job_type === 'preview') {
-      if (!instruction) {
+      if (!ALLOWED_PREVIEW_INPUT_MODE.includes(input_mode as (typeof ALLOWED_PREVIEW_INPUT_MODE)[number])) {
         return NextResponse.json(
-          { ok: false, error: 'INSTRUCTION_REQUIRED' },
+          { ok: false, error: 'INVALID_INPUT_MODE' },
           { status: 400 }
         )
+      }
+
+      if (input_mode === 'prompt_image') {
+        if (!instruction) {
+          return NextResponse.json(
+            { ok: false, error: 'INSTRUCTION_REQUIRED' },
+            { status: 400 }
+          )
+        }
+      } else if (input_mode === 'image_remix') {
+        const refId =
+          typeof reference_asset_id === 'string'
+            ? reference_asset_id.trim()
+            : reference_asset_id != null
+              ? String(reference_asset_id).trim()
+              : ''
+
+        if (!refId) {
+          return NextResponse.json(
+            { ok: false, error: 'REFERENCE_ASSET_REQUIRED' },
+            { status: 400 }
+          )
+        }
+
+        if (!isValidUuid(refId)) {
+          return NextResponse.json(
+            { ok: false, error: 'INVALID_REFERENCE_ASSET_ID' },
+            { status: 400 }
+          )
+        }
+
+        const refCheck = await supabaseAdmin
+          .from('source_assets')
+          .select('id')
+          .eq('id', refId)
+          .eq('project_id', project_id)
+          .eq('asset_type', 'reference')
+          .or('validation_status.eq.validated,asset_status.eq.validated,asset_status.eq.active')
+          .maybeSingle()
+
+        if (refCheck.error) {
+          return NextResponse.json(
+            { ok: false, error: refCheck.error.message },
+            { status: 500 }
+          )
+        }
+
+        if (!refCheck.data?.id) {
+          return NextResponse.json(
+            { ok: false, error: 'REFERENCE_ASSET_NOT_ALLOWED' },
+            { status: 403 }
+          )
+        }
       }
     }
 
@@ -225,7 +287,14 @@ export async function POST(req: NextRequest) {
             ? {
                 job_id: data.id,
                 project_id,
+                input_mode,
                 instruction,
+                reference_asset_id:
+                  typeof reference_asset_id === 'string'
+                    ? reference_asset_id.trim()
+                    : reference_asset_id == null
+                      ? null
+                      : String(reference_asset_id).trim(),
               }
             : {
                 job_id: data.id,

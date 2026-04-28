@@ -96,6 +96,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [stoppingJob, setStoppingJob] = useState(false)
   const [stopJobError, setStopJobError] = useState<string | null>(null)
   const [reconcilingJob, setReconcilingJob] = useState<string | null>(null)
+  const [nowMs, setNowMs] = useState(0)
   const [promptAccordionOpen, setPromptAccordionOpen] = useState(false)
   const [previewInstruction, setPreviewInstruction] = useState('')
   const [previewSubmitting, setPreviewSubmitting] = useState(false)
@@ -409,6 +410,11 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     jobStatus.latest_event?.step,
   ])
 
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+
   const isRunningStalled = useMemo(() => {
     if (!jobStatus.job) return false
     if (jobStatus.job.status !== 'running') return false
@@ -417,8 +423,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     const eventTs = Date.parse(jobStatus.latest_event?.event_ts || '')
     if (!Number.isFinite(eventTs)) return false
 
-    return Date.now() - eventTs > 180000
+    return nowMs !== 0 && nowMs - eventTs > 180000
   }, [
+    nowMs,
     jobStatus.job?.status,
     jobStatus.job?.kill_signal,
     jobStatus.latest_event?.event_ts,
@@ -428,6 +435,7 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
   const [deletePreviewResultError, setDeletePreviewResultError] = useState<string | null>(null)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPreviewImageFailed(false)
   }, [previewResultAssetKey])
 
@@ -768,14 +776,27 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     setPreviewSubmitError(null)
 
     const instruction = previewInstruction.trim()
-    if (!instruction) {
-      setPreviewValidationError('Enter an instruction to run preview.')
-      return
-    }
 
     if (!projectId) {
       setPreviewValidationError('Project ID is required.')
       return
+    }
+
+    const input_mode = inputType === 'upload' ? 'image_remix' : 'prompt_image'
+
+    let reference_asset_id: string | undefined
+    if (input_mode === 'image_remix') {
+      const refId = uploadedSourceAssetId?.trim() ?? ''
+      if (!refId) {
+        setPreviewValidationError('먼저 reference 이미지를 업로드해주세요.')
+        return
+      }
+      reference_asset_id = refId
+    } else {
+      if (!instruction) {
+        setPreviewValidationError('Enter an instruction to run preview.')
+        return
+      }
     }
 
     setPreviewSubmitting(true)
@@ -787,7 +808,9 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
           project_id: projectId,
           job_type: 'preview',
           status: 'queued',
+          input_mode,
           instruction,
+          reference_asset_id,
         }),
       })
 

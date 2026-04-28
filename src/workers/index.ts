@@ -29,6 +29,8 @@ type PreviewPayload = {
   project_id: string
   /** Present for jobs enqueued after API passes instruction through the queue. */
   instruction?: string
+  input_mode?: 'prompt_image' | 'image_remix'
+  reference_asset_id?: string | null
 }
 
 function getErrorMessage(error: unknown) {
@@ -797,7 +799,39 @@ async function handlePreviewJob(payload: PreviewPayload) {
 
   if (await shouldSkipTerminalJob(jobId, 'preview')) return
 
+  const inputMode = payload.input_mode ?? 'prompt_image'
   const instructionLength = (payload.instruction ?? '').length
+  const referenceAssetId =
+    payload.reference_asset_id == null ? null : String(payload.reference_asset_id).trim()
+
+  if (inputMode !== 'prompt_image' && inputMode !== 'image_remix') {
+    const msg = `Unsupported preview input_mode: ${String(payload.input_mode ?? '')}`
+    const finished = new Date().toISOString()
+    await updateAnalyzeJobStatus({
+      job_id: jobId,
+      status: 'failed',
+      progress: 5,
+      started_at: now,
+      finished_at: finished,
+      error_code: 'UNSUPPORTED_PREVIEW_INPUT_MODE',
+      error_message: msg,
+      output_asset_key: null,
+    })
+    await markCostFailed(jobId)
+    await addJobEvent({
+      job_id: jobId,
+      level: 'error',
+      step: 'unsupported_preview_input_mode',
+      message: msg,
+      payload: {
+        job_id: jobId,
+        project_id: projectId,
+        job_type: 'preview',
+        input_mode: payload.input_mode ?? null,
+      },
+    })
+    return
+  }
 
   await updateAnalyzeJobStatus({
     job_id: jobId,
@@ -819,10 +853,58 @@ async function handlePreviewJob(payload: PreviewPayload) {
     payload: {
       project_id: projectId,
       job_type: 'preview',
+      input_mode: inputMode,
+      reference_asset_id: referenceAssetId,
       instruction_present: instructionLength > 0,
       instruction_length: instructionLength,
     },
   })
+
+  if (inputMode === 'image_remix') {
+    if (!referenceAssetId) {
+      const msg = 'reference_asset_id is required for image_remix'
+      const finished = new Date().toISOString()
+      await updateAnalyzeJobStatus({
+        job_id: jobId,
+        status: 'failed',
+        progress: 5,
+        started_at: now,
+        finished_at: finished,
+        error_code: 'PREVIEW_INPUT_INVALID',
+        error_message: msg,
+        output_asset_key: null,
+      })
+      await markCostFailed(jobId)
+      await addJobEvent({
+        job_id: jobId,
+        level: 'error',
+        step: 'preview_input_invalid',
+        message: msg,
+        payload: {
+          job_id: jobId,
+          project_id: projectId,
+          job_type: 'preview',
+          input_mode: inputMode,
+        },
+      })
+      return
+    }
+
+    await addJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'image_remix_preview_started',
+      message: 'Temporary fallback preview renderer (non-AI). Reference is not applied yet.',
+      payload: {
+        job_id: jobId,
+        project_id: projectId,
+        job_type: 'preview',
+        input_mode: inputMode,
+        reference_asset_id: referenceAssetId,
+        instruction_length: instructionLength,
+      },
+    })
+  }
 
   let webpBuffer: Buffer
   try {
