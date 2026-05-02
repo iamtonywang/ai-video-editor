@@ -1408,6 +1408,196 @@ async function safeAddJobEventRenderInputResolved(
   }
 }
 
+async function safeAddRenderChunkGateJobEvent(params: {
+  job_id: string
+  level: string
+  step: string
+  message: string
+  payload?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await addJobEvent({
+      job_id: params.job_id,
+      level: params.level,
+      step: params.step,
+      message: params.message,
+      payload: params.payload,
+    })
+  } catch (e) {
+    console.warn(`${params.step} job_events insert failed`, getErrorMessage(e))
+  }
+}
+
+function parseMeasuredIdentityScoreForGate(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw.trim())
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function parseQualityGateThresholdForGate(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw.trim())
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+async function recordRenderChunkQualityGateEvaluation(params: {
+  jobId: string
+  projectId: string
+  chunkId: string
+  identityScoreRaw: unknown
+}): Promise<void> {
+  const { jobId, projectId, chunkId, identityScoreRaw } = params
+  const basePayload = {
+    project_id: projectId,
+    chunk_id: chunkId,
+    gate_type: 'identity' as const,
+    scope_type: 'chunk' as const,
+  }
+  try {
+    const measuredValue = parseMeasuredIdentityScoreForGate(identityScoreRaw)
+    const reasonCodeRecorded =
+      measuredValue === null
+        ? 'RENDER_CHUNK_IDENTITY_SCORE_NOT_MEASURED'
+        : 'RENDER_CHUNK_IDENTITY_GATE_RECORDED'
+
+    const gateCfg = await supabaseServer
+      .from('quality_gates')
+      .select('threshold')
+      .eq('project_id', projectId)
+      .eq('gate_type', 'identity')
+      .eq('scope_type', 'chunk')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (gateCfg.error || !gateCfg.data) {
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'render_chunk_quality_gate_skipped',
+        message: gateCfg.error
+          ? 'Chunk identity quality gate config read failed'
+          : 'Chunk identity quality gate not configured',
+        payload: {
+          ...basePayload,
+          reason_code: 'RENDER_CHUNK_IDENTITY_GATE_NOT_CONFIGURED',
+          ...(gateCfg.error ? { error_message: gateCfg.error.message } : {}),
+        },
+      })
+      return
+    }
+
+    const thresholdNum = parseQualityGateThresholdForGate(gateCfg.data.threshold)
+    if (thresholdNum === null) {
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'render_chunk_quality_gate_skipped',
+        message: 'Chunk identity quality gate threshold invalid',
+        payload: {
+          ...basePayload,
+          reason_code: 'RENDER_CHUNK_IDENTITY_GATE_THRESHOLD_INVALID',
+          raw_threshold: gateCfg.data.threshold,
+        },
+      })
+      return
+    }
+
+    const dup = await supabaseServer
+      .from('gate_evaluations')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('chunk_id', chunkId)
+      .eq('gate_type', 'identity')
+      .eq('scope_type', 'chunk')
+      .limit(1)
+      .maybeSingle()
+
+    if (dup.error) {
+      console.warn(
+        'recordRenderChunkQualityGateEvaluation duplicate check failed',
+        dup.error.message
+      )
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'render_chunk_quality_gate_record_failed',
+        message: 'Duplicate check failed for chunk quality gate',
+        payload: {
+          ...basePayload,
+          error_message: dup.error.message,
+        },
+      })
+      return
+    }
+
+    if (dup.data?.id) {
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'render_chunk_quality_gate_already_recorded',
+        message: 'Chunk identity gate evaluation already recorded',
+        payload: {
+          ...basePayload,
+          existing_evaluation_id: String(dup.data.id),
+        },
+      })
+      return
+    }
+
+    const insertRow = {
+      project_id: projectId,
+      scope_type: 'chunk' as const,
+      chunk_id: chunkId,
+      gate_type: 'identity' as const,
+      measured_value: measuredValue,
+      threshold: thresholdNum,
+      decision: 'passed' as const,
+      reason_code: reasonCodeRecorded,
+    }
+
+    const ins = await supabaseServer.from('gate_evaluations').insert(insertRow)
+    if (ins.error) {
+      console.warn('recordRenderChunkQualityGateEvaluation insert failed', ins.error.message)
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'render_chunk_quality_gate_record_failed',
+        message: ins.error.message,
+        payload: {
+          ...basePayload,
+          error_message: ins.error.message,
+        },
+      })
+      return
+    }
+
+    await safeAddRenderChunkGateJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_chunk_quality_gate_recorded',
+      message: 'Chunk identity quality gate evaluation recorded',
+      payload: {
+        ...basePayload,
+        measured_value: measuredValue,
+        threshold: thresholdNum,
+        decision: 'passed',
+        reason_code: reasonCodeRecorded,
+      },
+    })
+  } catch (e) {
+    console.warn('recordRenderChunkQualityGateEvaluation unexpected', getErrorMessage(e))
+  }
+}
+
 async function resolveRenderInputContract(params: {
   projectId: string
   chunkId: string
@@ -1980,6 +2170,12 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     step: 'render_chunk_uploaded',
     message: 'Render chunk uploaded',
     payload: { project_id: projectId, chunk_id: chunkId, path: outputPath, byte_length: webpBuffer.length },
+  })
+  await recordRenderChunkQualityGateEvaluation({
+    jobId,
+    projectId,
+    chunkId,
+    identityScoreRaw: chunkRow.data.identity_score,
   })
   await addJobEvent({
     job_id: jobId,
