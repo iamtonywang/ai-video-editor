@@ -2612,7 +2612,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
 
   const upload = await supabaseServer.storage.from('project-media').upload(outputPath, webpBuffer, {
     contentType: 'image/webp',
-    upsert: false,
+    upsert: true,
   })
   if (upload.error) {
     await supabaseServer.from('sequence_chunks').update({ render_status: 'failed' }).eq('id', chunkId)
