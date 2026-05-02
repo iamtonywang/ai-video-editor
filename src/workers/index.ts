@@ -1448,13 +1448,246 @@ function parseQualityGateThresholdForGate(raw: unknown): number | null {
   return null
 }
 
+function resolveMeasuredIdentityScoreForGate(params: {
+  measuredIdentityScoreOverride: number | null | undefined
+  identityScoreRaw: unknown
+}): number | null {
+  const { measuredIdentityScoreOverride, identityScoreRaw } = params
+  if (measuredIdentityScoreOverride !== undefined) {
+    if (measuredIdentityScoreOverride === null) return null
+    if (
+      typeof measuredIdentityScoreOverride === 'number' &&
+      Number.isFinite(measuredIdentityScoreOverride)
+    ) {
+      return measuredIdentityScoreOverride
+    }
+    return null
+  }
+  return parseMeasuredIdentityScoreForGate(identityScoreRaw)
+}
+
+type BasicRenderChunkIdentityScoreResult = {
+  score: number | null
+  referenceAssetId: string | null
+  referenceSource: 'identity_profile' | 'fallback' | null
+  reasonCode?: string
+  errorMessage?: string
+}
+
+async function calculateBasicRenderChunkIdentityScore(params: {
+  jobId: string
+  projectId: string
+  chunkId: string
+  outputPath: string
+  renderInput: Record<string, unknown>
+}): Promise<BasicRenderChunkIdentityScoreResult> {
+  const { jobId, projectId, chunkId, outputPath, renderInput } = params
+  void jobId
+  let referenceAssetId: string | null = null
+  let referenceSource: 'identity_profile' | 'fallback' | null = null
+
+  try {
+    const expectedRefPrefix = `projects/${projectId}/references/`
+    const expectedOutPrefix = `projects/${projectId}/chunks/${chunkId}/`
+
+    const ipRaw = renderInput.identity_profile_id
+    const refRaw = renderInput.reference_asset_id
+    const ipStr = ipRaw != null && String(ipRaw).trim() !== '' ? String(ipRaw).trim() : ''
+    const refStr = refRaw != null && String(refRaw).trim() !== '' ? String(refRaw).trim() : ''
+    if (ipStr && isValidUuid(ipStr) && refStr && isValidUuid(refStr)) {
+      referenceAssetId = refStr
+      referenceSource = 'identity_profile'
+    } else {
+      const fb = await supabaseServer
+        .from('source_assets')
+        .select('id')
+        .eq('project_id', projectId)
+        .eq('asset_type', 'reference')
+        .or('validation_status.eq.validated,asset_status.eq.validated,asset_status.eq.active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (fb.error) {
+        return {
+          score: null,
+          referenceAssetId: null,
+          referenceSource: null,
+          reasonCode: 'REFERENCE_ASSET_NOT_AVAILABLE',
+          errorMessage: fb.error.message,
+        }
+      }
+      if (!fb.data?.id) {
+        return {
+          score: null,
+          referenceAssetId: null,
+          referenceSource: null,
+          reasonCode: 'REFERENCE_ASSET_NOT_AVAILABLE',
+        }
+      }
+      referenceAssetId = String(fb.data.id)
+      referenceSource = 'fallback'
+    }
+
+    const { row: refRow, error: refErr } = await fetchSourceAssetMetaRow(referenceAssetId)
+    if (refErr || !refRow) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'REFERENCE_ASSET_NOT_AVAILABLE',
+        errorMessage: refErr ?? undefined,
+      }
+    }
+
+    const assetKey = refRow.asset_key == null ? '' : String(refRow.asset_key).trim()
+    if (!assetKey || !assetKey.startsWith(expectedRefPrefix)) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'REFERENCE_ASSET_KEY_UNSUPPORTED',
+      }
+    }
+
+    const outTrim = typeof outputPath === 'string' ? outputPath.trim() : ''
+    if (
+      !outTrim ||
+      !outTrim.startsWith(expectedOutPrefix) ||
+      !outTrim.endsWith('render.webp')
+    ) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'RENDER_OUTPUT_KEY_UNSUPPORTED',
+      }
+    }
+
+    const refDl = await supabaseServer.storage.from('project-media').download(assetKey)
+    if (refDl.error || !refDl.data) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'IDENTITY_SCORE_ASSET_DOWNLOAD_FAILED',
+        errorMessage: refDl.error?.message ?? 'NO_FILE_DATA',
+      }
+    }
+
+    const outDl = await supabaseServer.storage.from('project-media').download(outTrim)
+    if (outDl.error || !outDl.data) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'IDENTITY_SCORE_ASSET_DOWNLOAD_FAILED',
+        errorMessage: outDl.error?.message ?? 'NO_FILE_DATA',
+      }
+    }
+
+    const refBuf = Buffer.from(await refDl.data.arrayBuffer())
+    const outBuf = Buffer.from(await outDl.data.arrayBuffer())
+
+    const toRgb128 = async (buf: Buffer): Promise<Buffer> => {
+      const { data, info } = await sharp(buf)
+        .resize(128, 128, { fit: 'cover' })
+        .flatten({ background: { r: 0, g: 0, b: 0 } })
+        .raw()
+        .toBuffer({ resolveWithObject: true })
+      const w = info.width ?? 128
+      const h = info.height ?? 128
+      const ch = info.channels ?? 0
+      if (ch === 3) return data
+      if (ch === 4) {
+        const px = w * h
+        const out = Buffer.alloc(px * 3)
+        for (let p = 0; p < px; p++) {
+          const j = p * 4
+          const i = p * 3
+          out[i] = data[j] ?? 0
+          out[i + 1] = data[j + 1] ?? 0
+          out[i + 2] = data[j + 2] ?? 0
+        }
+        return out
+      }
+      throw new Error(`unexpected_channel_count:${ch}`)
+    }
+
+    const refP = await toRgb128(refBuf)
+    const outP = await toRgb128(outBuf)
+    if (refP.length !== outP.length || refP.length === 0) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'IDENTITY_SCORE_CALCULATION_FAILED',
+        errorMessage: 'pixel_buffer_length_mismatch',
+      }
+    }
+
+    let sumAbs = 0
+    for (let i = 0; i < refP.length; i++) {
+      sumAbs += Math.abs((refP[i] ?? 0) - (outP[i] ?? 0))
+    }
+    const meanAbs = sumAbs / refP.length
+    const diff = meanAbs / 255
+    let score = 1 - diff
+    score = Math.max(0, Math.min(1, score))
+    score = Math.round(score * 10000) / 10000
+    if (!Number.isFinite(score)) {
+      return {
+        score: null,
+        referenceAssetId,
+        referenceSource,
+        reasonCode: 'IDENTITY_SCORE_CALCULATION_FAILED',
+        errorMessage: 'non_finite_score',
+      }
+    }
+
+    return {
+      score,
+      referenceAssetId,
+      referenceSource,
+    }
+  } catch (err) {
+    return {
+      score: null,
+      referenceAssetId,
+      referenceSource,
+      reasonCode: 'IDENTITY_SCORE_CALCULATION_FAILED',
+      errorMessage: String((err as { message?: unknown })?.message ?? err),
+    }
+  }
+}
+
+async function safeAddRenderChunkIdentityScoreJobEvent(params: {
+  job_id: string
+  level: string
+  step: string
+  message: string
+  payload?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await addJobEvent({
+      job_id: params.job_id,
+      level: params.level,
+      step: params.step,
+      message: params.message,
+      payload: params.payload,
+    })
+  } catch (e) {
+    console.warn(`${params.step} job_events insert failed`, getErrorMessage(e))
+  }
+}
+
 async function recordRenderChunkQualityGateEvaluation(params: {
   jobId: string
   projectId: string
   chunkId: string
   identityScoreRaw: unknown
+  measuredIdentityScoreOverride?: number | null
 }): Promise<void> {
-  const { jobId, projectId, chunkId, identityScoreRaw } = params
+  const { jobId, projectId, chunkId, identityScoreRaw, measuredIdentityScoreOverride } = params
   const basePayload = {
     project_id: projectId,
     chunk_id: chunkId,
@@ -1462,7 +1695,10 @@ async function recordRenderChunkQualityGateEvaluation(params: {
     scope_type: 'chunk' as const,
   }
   try {
-    const measuredValue = parseMeasuredIdentityScoreForGate(identityScoreRaw)
+    const measuredValue = resolveMeasuredIdentityScoreForGate({
+      measuredIdentityScoreOverride,
+      identityScoreRaw,
+    })
     const reasonCodeRecorded =
       measuredValue === null
         ? 'RENDER_CHUNK_IDENTITY_SCORE_NOT_MEASURED'
@@ -2171,11 +2407,103 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     message: 'Render chunk uploaded',
     payload: { project_id: projectId, chunk_id: chunkId, path: outputPath, byte_length: webpBuffer.length },
   })
+
+  const outputBasename = storageKeyBasename(outputPath)
+  await safeAddRenderChunkIdentityScoreJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_identity_score_started',
+    message: 'Render chunk identity score calculation started',
+    payload: {
+      project_id: projectId,
+      chunk_id: chunkId,
+      output_basename: outputBasename,
+    },
+  })
+
+  const identityCalc = await calculateBasicRenderChunkIdentityScore({
+    jobId,
+    projectId,
+    chunkId,
+    outputPath,
+    renderInput,
+  })
+
+  let measuredIdentityScoreOverride: number | null = null
+  if (identityCalc.score !== null && Number.isFinite(identityCalc.score)) {
+    measuredIdentityScoreOverride = identityCalc.score
+    const idUpd = await supabaseServer
+      .from('sequence_chunks')
+      .update({ identity_score: identityCalc.score } as Record<string, unknown>)
+      .eq('id', chunkId)
+    if (idUpd.error) {
+      console.warn(
+        'sequence_chunks.identity_score update failed',
+        chunkId,
+        idUpd.error.message
+      )
+      await safeAddRenderChunkIdentityScoreJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'render_chunk_identity_score_update_failed',
+        message: idUpd.error.message,
+        payload: {
+          project_id: projectId,
+          chunk_id: chunkId,
+          reference_asset_id: identityCalc.referenceAssetId,
+          reference_source: identityCalc.referenceSource,
+          score: identityCalc.score,
+          reason_code: 'IDENTITY_SCORE_DB_UPDATE_FAILED',
+          output_basename: outputBasename,
+        },
+      })
+    }
+    await safeAddRenderChunkIdentityScoreJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_chunk_identity_score_recorded',
+      message: 'Render chunk identity score recorded',
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        reference_asset_id: identityCalc.referenceAssetId,
+        reference_source: identityCalc.referenceSource,
+        score: identityCalc.score,
+        reason_code: identityCalc.reasonCode ?? null,
+        output_basename: outputBasename,
+      },
+    })
+  } else {
+    measuredIdentityScoreOverride = null
+    const isHardFail = identityCalc.reasonCode === 'IDENTITY_SCORE_CALCULATION_FAILED'
+    await safeAddRenderChunkIdentityScoreJobEvent({
+      job_id: jobId,
+      level: isHardFail ? 'warn' : 'info',
+      step: isHardFail
+        ? 'render_chunk_identity_score_failed'
+        : 'render_chunk_identity_score_skipped',
+      message: isHardFail
+        ? 'Render chunk identity score calculation failed'
+        : 'Render chunk identity score skipped',
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        reference_asset_id: identityCalc.referenceAssetId,
+        reference_source: identityCalc.referenceSource,
+        score: null,
+        reason_code: identityCalc.reasonCode ?? null,
+        error_message: identityCalc.errorMessage,
+        output_basename: outputBasename,
+      },
+    })
+  }
+
   await recordRenderChunkQualityGateEvaluation({
     jobId,
     projectId,
     chunkId,
     identityScoreRaw: chunkRow.data.identity_score,
+    measuredIdentityScoreOverride,
   })
   await addJobEvent({
     job_id: jobId,
