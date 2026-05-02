@@ -168,6 +168,31 @@ export async function POST(req: NextRequest) {
           { status: 409 }
         )
       }
+
+      const chunkIdentityGateForRequest = await supabaseAdmin
+        .from('gate_evaluations')
+        .select('decision')
+        .eq('project_id', String(project_id))
+        .eq('gate_type', 'identity')
+        .eq('scope_type', 'chunk')
+        .eq('chunk_id', renderChunkContext.chunk_id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (chunkIdentityGateForRequest.error) {
+        return NextResponse.json(
+          { ok: false, error: chunkIdentityGateForRequest.error.message },
+          { status: 500 }
+        )
+      }
+
+      if (chunkIdentityGateForRequest.data?.decision === 'blocked') {
+        return NextResponse.json(
+          { ok: false, error: 'CHUNK_IDENTITY_GATE_BLOCKED' },
+          { status: 403 }
+        )
+      }
     }
 
     const { data: dupRow, error: dupError } = await supabaseAdmin
@@ -195,30 +220,6 @@ export async function POST(req: NextRequest) {
           job_id: String(dupRow.id),
         },
         { status: 409 }
-      )
-    }
-
-    const latestChunkIdentityGate = await supabaseAdmin
-      .from('gate_evaluations')
-      .select('decision')
-      .eq('project_id', project_id)
-      .eq('gate_type', 'identity')
-      .eq('scope_type', 'chunk')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (latestChunkIdentityGate.error) {
-      return NextResponse.json(
-        { ok: false, error: latestChunkIdentityGate.error.message },
-        { status: 500 }
-      )
-    }
-
-    if (latestChunkIdentityGate.data?.decision === 'blocked') {
-      return NextResponse.json(
-        { ok: false, error: 'CHUNK_IDENTITY_GATE_BLOCKED' },
-        { status: 403 }
       )
     }
 
