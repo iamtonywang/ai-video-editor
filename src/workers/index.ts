@@ -1474,6 +1474,13 @@ type BasicRenderChunkIdentityScoreResult = {
   errorMessage?: string
 }
 
+/** Single persist shape: finite only, [0,1] clamp, 2 decimals (matches typical DB numeric scale). */
+function normalizeRenderChunkIdentityScoreForPersist(score: number): number | null {
+  if (!Number.isFinite(score)) return null
+  const clamped = Math.max(0, Math.min(1, score))
+  return Math.round(clamped * 100) / 100
+}
+
 async function calculateBasicRenderChunkIdentityScore(params: {
   jobId: string
   projectId: string
@@ -1633,7 +1640,6 @@ async function calculateBasicRenderChunkIdentityScore(params: {
     const diff = meanAbs / 255
     let score = 1 - diff
     score = Math.max(0, Math.min(1, score))
-    score = Math.round(score * 10000) / 10000
     if (!Number.isFinite(score)) {
       return {
         score: null,
@@ -2429,12 +2435,17 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     renderInput,
   })
 
+  const normalizedScore =
+    identityCalc.score !== null && Number.isFinite(identityCalc.score)
+      ? normalizeRenderChunkIdentityScoreForPersist(identityCalc.score)
+      : null
+
   let measuredIdentityScoreOverride: number | null = null
-  if (identityCalc.score !== null && Number.isFinite(identityCalc.score)) {
-    measuredIdentityScoreOverride = identityCalc.score
+  if (normalizedScore !== null) {
+    measuredIdentityScoreOverride = normalizedScore
     const idUpd = await supabaseServer
       .from('sequence_chunks')
-      .update({ identity_score: identityCalc.score } as Record<string, unknown>)
+      .update({ identity_score: normalizedScore } as Record<string, unknown>)
       .eq('id', chunkId)
     if (idUpd.error) {
       console.warn(
@@ -2452,7 +2463,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
           chunk_id: chunkId,
           reference_asset_id: identityCalc.referenceAssetId,
           reference_source: identityCalc.referenceSource,
-          score: identityCalc.score,
+          score: normalizedScore,
           reason_code: 'IDENTITY_SCORE_DB_UPDATE_FAILED',
           output_basename: outputBasename,
         },
@@ -2468,7 +2479,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
         chunk_id: chunkId,
         reference_asset_id: identityCalc.referenceAssetId,
         reference_source: identityCalc.referenceSource,
-        score: identityCalc.score,
+        score: normalizedScore,
         reason_code: identityCalc.reasonCode ?? null,
         output_basename: outputBasename,
       },
