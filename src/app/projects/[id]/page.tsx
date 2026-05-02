@@ -134,20 +134,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }>({ job: null, latest_event: null })
 
-  const [chunkQueryId, setChunkQueryId] = useState('')
-  const [chunkResultLoading, setChunkResultLoading] = useState(false)
-  const [chunkResultError, setChunkResultError] = useState<string | null>(null)
-  const [chunkResult, setChunkResult] = useState<null | {
-    chunk_id: string
-    render_status: string | null
-    output_asset_key: string | null
-    result_url: string | null
-  }>(null)
-
-  const [renderChunkSubmitting, setRenderChunkSubmitting] = useState(false)
-  const [renderChunkSubmitError, setRenderChunkSubmitError] = useState<string | null>(null)
-  const [renderChunkRunInfo, setRenderChunkRunInfo] = useState<string | null>(null)
-
   const refreshExecutionContext = useCallback(async (id: string) => {
     const response = await fetch(`/api/projects/${id}/execution-context`, {
       method: 'GET',
@@ -844,94 +830,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
-  async function handleFetchChunkResult() {
-    const chunkId = chunkQueryId.trim()
-    if (!projectId) return
-    if (!chunkId) {
-      setChunkResultError('chunk_id를 입력하세요.')
-      return
-    }
-
-    setChunkResultLoading(true)
-    setChunkResultError(null)
-    try {
-      const response = await fetch(
-        `/api/projects/${projectId}/chunks/${encodeURIComponent(chunkId)}/result`,
-        { method: 'GET', cache: 'no-store' }
-      )
-      const body = (await response.json()) as
-        | {
-            ok: true
-            chunk_id: string
-            render_status: string | null
-            output_asset_key: string | null
-            result_url: string | null
-          }
-        | { ok: false; error: string; error_detail?: string }
-
-      if (!response.ok || !body.ok) {
-        setChunkResultError(body.ok ? FALLBACK_ERROR_MESSAGE : body.error)
-        setChunkResult(null)
-        return
-      }
-
-      setChunkResult({
-        chunk_id: body.chunk_id,
-        render_status: body.render_status,
-        output_asset_key: body.output_asset_key,
-        result_url: body.result_url,
-      })
-    } catch {
-      setChunkResultError(FALLBACK_ERROR_MESSAGE)
-      setChunkResult(null)
-    } finally {
-      setChunkResultLoading(false)
-    }
-  }
-
-  async function handleRunRenderChunk() {
-    setRenderChunkSubmitError(null)
-    setRenderChunkRunInfo(null)
-
-    if (!projectId) return
-
-    const trimmedChunkId = chunkQueryId.trim()
-    if (!trimmedChunkId) {
-      setRenderChunkSubmitError('chunk_id를 입력하세요.')
-      return
-    }
-
-    setRenderChunkSubmitting(true)
-    try {
-      const response = await fetch('/api/job/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          project_id: projectId,
-          job_type: 'render_chunk',
-          chunk_id: trimmedChunkId,
-        }),
-      })
-
-      const body = (await response.json()) as { ok?: boolean; error?: string }
-
-      if (!response.ok || !body.ok) {
-        setRenderChunkSubmitError(body.error ?? FALLBACK_ERROR_MESSAGE)
-        return
-      }
-
-      setRenderChunkRunInfo(
-        'render_chunk 작업이 등록되었습니다. 잠시 후 조회를 다시 실행하세요. 작업 완료 전에는 결과 URL이 없을 수 있습니다.'
-      )
-
-      await handleFetchChunkResult()
-    } catch {
-      setRenderChunkSubmitError(FALLBACK_ERROR_MESSAGE)
-    } finally {
-      setRenderChunkSubmitting(false)
-    }
-  }
-
   const buttonStyle = useMemo(
     () =>
       ({
@@ -1345,76 +1243,6 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
               </div>
             ) : null}
           </section>
-
-          <div className={styles.workflowStep}>
-            <section className={styles.jobCard} aria-label="Chunk Result">
-              <p className={styles.metaHint}>
-                Chunk 결과 조회 (preview/job-status와 분리)
-              </p>
-              <input
-                type="text"
-                value={chunkQueryId}
-                onChange={(e) => setChunkQueryId(e.target.value)}
-                className={styles.referenceInput}
-                placeholder="chunk_id (UUID)"
-                aria-label="Chunk id"
-              />
-              <div className={styles.jobActions}>
-                <button
-                  type="button"
-                  className={styles.stopButton}
-                  disabled={chunkResultLoading || !projectId}
-                  onClick={handleFetchChunkResult}
-                >
-                  {chunkResultLoading ? '조회 중…' : '조회'}
-                </button>
-                <button
-                  type="button"
-                  className={styles.stopButton}
-                  disabled={!projectId || renderChunkSubmitting}
-                  onClick={handleRunRenderChunk}
-                  aria-label="render_chunk 실행"
-                >
-                  {renderChunkSubmitting ? '등록 중…' : 'render_chunk 실행'}
-                </button>
-              </div>
-              {renderChunkSubmitError ? (
-                <p className={styles.referenceError} role="alert">
-                  {renderChunkSubmitError}
-                </p>
-              ) : null}
-              {renderChunkRunInfo ? <p className={styles.metaHint}>{renderChunkRunInfo}</p> : null}
-              {chunkResultError ? (
-                <p className={styles.referenceError} role="alert">
-                  {chunkResultError}
-                </p>
-              ) : null}
-              {chunkResult ? (
-                <>
-                  <p className={styles.metaHint}>
-                    render_status: {chunkResult.render_status ?? '-'}
-                  </p>
-                  {chunkResult.result_url ? (
-                    <div className={styles.previewViewerFrame}>
-                      <img
-                        src={chunkResult.result_url}
-                        alt="chunk result"
-                        style={{
-                          width: '100%',
-                          height: '100%',
-                          objectFit: 'cover',
-                          borderRadius: 12,
-                          display: 'block',
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <p className={styles.metaHint}>결과 URL이 없습니다.</p>
-                  )}
-                </>
-              ) : null}
-            </section>
-          </div>
         </section>
       </div>
     </main>
