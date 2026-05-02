@@ -144,6 +144,10 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     result_url: string | null
   }>(null)
 
+  const [renderChunkSubmitting, setRenderChunkSubmitting] = useState(false)
+  const [renderChunkSubmitError, setRenderChunkSubmitError] = useState<string | null>(null)
+  const [renderChunkRunInfo, setRenderChunkRunInfo] = useState<string | null>(null)
+
   const refreshExecutionContext = useCallback(async (id: string) => {
     const response = await fetch(`/api/projects/${id}/execution-context`, {
       method: 'GET',
@@ -885,6 +889,49 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
     }
   }
 
+  async function handleRunRenderChunk() {
+    setRenderChunkSubmitError(null)
+    setRenderChunkRunInfo(null)
+
+    if (!projectId) return
+
+    const trimmedChunkId = chunkQueryId.trim()
+    if (!trimmedChunkId) {
+      setRenderChunkSubmitError('chunk_id를 입력하세요.')
+      return
+    }
+
+    setRenderChunkSubmitting(true)
+    try {
+      const response = await fetch('/api/job/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_id: projectId,
+          job_type: 'render_chunk',
+          chunk_id: trimmedChunkId,
+        }),
+      })
+
+      const body = (await response.json()) as { ok?: boolean; error?: string }
+
+      if (!response.ok || !body.ok) {
+        setRenderChunkSubmitError(body.error ?? FALLBACK_ERROR_MESSAGE)
+        return
+      }
+
+      setRenderChunkRunInfo(
+        'render_chunk 작업이 등록되었습니다. 잠시 후 조회를 다시 실행하세요. 작업 완료 전에는 결과 URL이 없을 수 있습니다.'
+      )
+
+      await handleFetchChunkResult()
+    } catch {
+      setRenderChunkSubmitError(FALLBACK_ERROR_MESSAGE)
+    } finally {
+      setRenderChunkSubmitting(false)
+    }
+  }
+
   const buttonStyle = useMemo(
     () =>
       ({
@@ -1321,7 +1368,22 @@ export default function ProjectGateStatusPage({ params }: PageProps) {
                 >
                   {chunkResultLoading ? '조회 중…' : '조회'}
                 </button>
+                <button
+                  type="button"
+                  className={styles.stopButton}
+                  disabled={!projectId || renderChunkSubmitting}
+                  onClick={handleRunRenderChunk}
+                  aria-label="render_chunk 실행"
+                >
+                  {renderChunkSubmitting ? '등록 중…' : 'render_chunk 실행'}
+                </button>
               </div>
+              {renderChunkSubmitError ? (
+                <p className={styles.referenceError} role="alert">
+                  {renderChunkSubmitError}
+                </p>
+              ) : null}
+              {renderChunkRunInfo ? <p className={styles.metaHint}>{renderChunkRunInfo}</p> : null}
               {chunkResultError ? (
                 <p className={styles.referenceError} role="alert">
                   {chunkResultError}
