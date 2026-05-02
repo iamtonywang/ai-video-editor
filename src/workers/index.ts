@@ -1278,6 +1278,354 @@ async function renderChunkDummyWebp(params: {
   return sharp(Buffer.from(svg, 'utf8')).webp({ quality: 82 }).toBuffer()
 }
 
+function storageKeyBasename(key: string | null | undefined): string | null {
+  if (key == null || typeof key !== 'string') return null
+  const t = key.trim()
+  if (!t) return null
+  const i = t.lastIndexOf('/')
+  return i >= 0 ? t.slice(i + 1) : t
+}
+
+function secretKeyPresent(key: string | null | undefined): boolean {
+  return typeof key === 'string' && key.trim().length > 0
+}
+
+type SourceAssetMetaRow = {
+  id: string
+  asset_key: string
+  asset_type: string
+  asset_status: string
+  validation_status: string | null
+  mime_type: string | null
+}
+
+function emptyAssetMetaForRenderInput(): Record<string, unknown> {
+  return {
+    asset_key_present: false,
+    asset_key_basename: null,
+    asset_type: null,
+    asset_status: null,
+    validation_status: null,
+    mime_type: null,
+  }
+}
+
+function emptyPrevChunkMetaForRenderInput(): Record<string, unknown> {
+  return {
+    render_status: null,
+    output_asset_key_present: false,
+    output_asset_key_basename: null,
+    identity_score: null,
+    style_score: null,
+  }
+}
+
+async function fetchSourceAssetMetaRow(assetId: string): Promise<{
+  row: SourceAssetMetaRow | null
+  error: string | null
+}> {
+  const full = await supabaseServer
+    .from('source_assets')
+    .select('id, asset_key, asset_type, asset_status, validation_status, mime_type')
+    .eq('id', assetId)
+    .maybeSingle()
+  if (!full.error && full.data) {
+    const d = full.data as Record<string, unknown>
+    return {
+      row: {
+        id: String(d.id),
+        asset_key: String(d.asset_key ?? ''),
+        asset_type: String(d.asset_type ?? ''),
+        asset_status: String(d.asset_status ?? ''),
+        validation_status: d.validation_status != null ? String(d.validation_status) : null,
+        mime_type: d.mime_type != null ? String(d.mime_type) : null,
+      },
+      error: null,
+    }
+  }
+  const errMsg = full.error?.message ?? ''
+  if (errMsg && /mime_type/i.test(errMsg)) {
+    const noMime = await supabaseServer
+      .from('source_assets')
+      .select('id, asset_key, asset_type, asset_status, validation_status')
+      .eq('id', assetId)
+      .maybeSingle()
+    if (noMime.error) return { row: null, error: noMime.error.message }
+    if (!noMime.data) return { row: null, error: 'SOURCE_ASSET_NOT_FOUND' }
+    const d = noMime.data as Record<string, unknown>
+    return {
+      row: {
+        id: String(d.id),
+        asset_key: String(d.asset_key ?? ''),
+        asset_type: String(d.asset_type ?? ''),
+        asset_status: String(d.asset_status ?? ''),
+        validation_status: d.validation_status != null ? String(d.validation_status) : null,
+        mime_type: null,
+      },
+      error: null,
+    }
+  }
+  return { row: null, error: full.error?.message ?? 'SOURCE_ASSET_NOT_FOUND' }
+}
+
+function buildAssetMetaForRenderInput(
+  row: SourceAssetMetaRow | null,
+  fetchError: string | null
+): { meta: Record<string, unknown>; err: string | null } {
+  if (fetchError && !row) {
+    return { meta: emptyAssetMetaForRenderInput(), err: fetchError }
+  }
+  if (!row) {
+    return { meta: emptyAssetMetaForRenderInput(), err: null }
+  }
+  return {
+    meta: {
+      asset_key_present: secretKeyPresent(row.asset_key),
+      asset_key_basename: storageKeyBasename(row.asset_key),
+      asset_type: row.asset_type || null,
+      asset_status: row.asset_status || null,
+      validation_status: row.validation_status,
+      mime_type: row.mime_type,
+    },
+    err: null,
+  }
+}
+
+async function safeAddJobEventRenderInputResolved(
+  jobId: string,
+  renderInput: Record<string, unknown>
+): Promise<void> {
+  try {
+    await addJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_input_resolved',
+      message: 'Render input contract resolved',
+      payload: { render_input: renderInput },
+    })
+  } catch (e) {
+    console.warn('render_input_resolved job_events insert failed', getErrorMessage(e))
+  }
+}
+
+async function resolveRenderInputContract(params: {
+  projectId: string
+  chunkId: string
+  chunk: {
+    id: string
+    scene_id: string
+    chunk_index: number | string | null
+    identity_score?: number | string | null
+    style_score?: number | string | null
+  }
+  scene: {
+    id: string
+    sequence_id: string
+    scene_index: number | string | null
+    difficulty_level?: string | null
+  }
+  sequence: {
+    id: string
+    project_id: string
+    source_asset_id?: string | null
+    duration_sec?: number | string | null
+    fps?: number | string | null
+    width?: number | string | null
+    height?: number | string | null
+  }
+}): Promise<Record<string, unknown>> {
+  const { projectId, chunkId, chunk, scene, sequence } = params
+  const sceneId = String(chunk.scene_id)
+  const sequenceId = String(sequence.id)
+  const rawIdx = chunk.chunk_index
+  const chunkIndexNum =
+    typeof rawIdx === 'number'
+      ? rawIdx
+      : typeof rawIdx === 'string'
+        ? Number(rawIdx)
+        : NaN
+  const chunkIndexSafe = Number.isFinite(chunkIndexNum) ? chunkIndexNum : 0
+
+  const parseNum = (v: unknown): number | null => {
+    if (v == null) return null
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+
+  let identity_profile_id: string | null = null
+  let identity_error: string | null = null
+  let identity_meta: Record<string, unknown> = {
+    identity_status: null,
+    build_score: null,
+    embedding_key_present: false,
+    latent_base_key_present: false,
+    anchor_manifest_key_present: false,
+  }
+
+  let reference_asset_id: string | null = null
+  let reference_asset_error: string | null = null
+  let reference_asset_meta: Record<string, unknown> = emptyAssetMetaForRenderInput()
+
+  let source_asset_error: string | null = null
+  let source_asset_meta: Record<string, unknown> = emptyAssetMetaForRenderInput()
+
+  let prev_chunk_id: string | null = null
+  let prev_chunk_error: string | null = null
+  let prev_chunk_meta: Record<string, unknown> = emptyPrevChunkMetaForRenderInput()
+
+  const projRow = await supabaseServer
+    .from('projects')
+    .select('active_identity_profile_id')
+    .eq('id', projectId)
+    .maybeSingle()
+
+  let profileRefId: string | null = null
+
+  if (projRow.error) {
+    identity_error = projRow.error.message
+  } else {
+    const aidRaw = projRow.data?.active_identity_profile_id
+    const aidStr = aidRaw != null && aidRaw !== '' ? String(aidRaw).trim() : ''
+    if (aidStr && isValidUuid(aidStr)) {
+      identity_profile_id = aidStr
+      const ip = await supabaseServer
+        .from('identity_profiles')
+        .select(
+          'id, reference_asset_id, embedding_key, latent_base_key, anchor_manifest_key, identity_status, build_score'
+        )
+        .eq('id', aidStr)
+        .maybeSingle()
+      if (ip.error) {
+        identity_error = ip.error.message
+      } else if (!ip.data) {
+        identity_error = 'IDENTITY_PROFILE_NOT_FOUND'
+      } else {
+        const d = ip.data as Record<string, unknown>
+        const bs = parseNum(d.build_score)
+        identity_meta = {
+          identity_status:
+            d.identity_status != null && String(d.identity_status).trim() !== ''
+              ? String(d.identity_status)
+              : null,
+          build_score: bs,
+          embedding_key_present: secretKeyPresent(
+            d.embedding_key != null ? String(d.embedding_key) : undefined
+          ),
+          latent_base_key_present: secretKeyPresent(
+            d.latent_base_key != null ? String(d.latent_base_key) : undefined
+          ),
+          anchor_manifest_key_present: secretKeyPresent(
+            d.anchor_manifest_key != null ? String(d.anchor_manifest_key) : undefined
+          ),
+        }
+        const r = d.reference_asset_id
+        const rs = r != null && r !== '' ? String(r).trim() : ''
+        if (rs && isValidUuid(rs)) profileRefId = rs
+      }
+    }
+  }
+
+  if (profileRefId) {
+    reference_asset_id = profileRefId
+  } else {
+    const fb = await supabaseServer
+      .from('source_assets')
+      .select('id')
+      .eq('project_id', projectId)
+      .eq('asset_type', 'reference')
+      .or('validation_status.eq.validated,asset_status.eq.validated,asset_status.eq.active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (fb.error) {
+      reference_asset_error = fb.error.message
+    } else if (fb.data?.id) {
+      reference_asset_id = String(fb.data.id)
+    }
+  }
+
+  if (reference_asset_id) {
+    const { row, error } = await fetchSourceAssetMetaRow(reference_asset_id)
+    const built = buildAssetMetaForRenderInput(row, error)
+    reference_asset_meta = built.meta
+    if (built.err) reference_asset_error = built.err
+  }
+
+  const srcRaw = sequence.source_asset_id
+  const srcStr = srcRaw != null && srcRaw !== '' ? String(srcRaw).trim() : ''
+  const resolvedSourceAssetId = srcStr && isValidUuid(srcStr) ? srcStr : null
+
+  if (resolvedSourceAssetId) {
+    const { row, error } = await fetchSourceAssetMetaRow(resolvedSourceAssetId)
+    const built = buildAssetMetaForRenderInput(row, error)
+    source_asset_meta = built.meta
+    source_asset_error = built.err
+  }
+
+  if (chunkIndexSafe > 0) {
+    const prev = await supabaseServer
+      .from('sequence_chunks')
+      .select('id, chunk_index, render_status, output_asset_key, identity_score, style_score')
+      .eq('scene_id', sceneId)
+      .eq('chunk_index', chunkIndexSafe - 1)
+      .maybeSingle()
+    if (prev.error) {
+      prev_chunk_error = prev.error.message
+    } else if (prev.data?.id) {
+      const pd = prev.data as Record<string, unknown>
+      prev_chunk_id = String(pd.id)
+      const oak = pd.output_asset_key != null ? String(pd.output_asset_key) : ''
+      prev_chunk_meta = {
+        render_status:
+          pd.render_status != null && String(pd.render_status).trim() !== ''
+            ? String(pd.render_status)
+            : null,
+        output_asset_key_present: secretKeyPresent(oak),
+        output_asset_key_basename: storageKeyBasename(oak || null),
+        identity_score: parseNum(pd.identity_score),
+        style_score: parseNum(pd.style_score),
+      }
+    }
+  }
+
+  const sceneIndexNum = parseNum(scene.scene_index)
+  const diffRaw = scene.difficulty_level
+  const difficulty_level =
+    diffRaw != null && String(diffRaw).trim() !== '' ? String(diffRaw) : null
+
+  return {
+    project_id: projectId,
+    sequence_id: sequenceId,
+    scene_id: sceneId,
+    chunk_id: chunkId,
+    chunk_index: chunkIndexSafe,
+    source_asset_id: resolvedSourceAssetId,
+    reference_asset_id,
+    identity_profile_id,
+    prev_chunk_id,
+    input_manifest_key: null,
+    sequence_meta: {
+      duration_sec: parseNum(sequence.duration_sec),
+      fps: parseNum(sequence.fps),
+      width: parseNum(sequence.width),
+      height: parseNum(sequence.height),
+    },
+    scene_meta: {
+      scene_index: sceneIndexNum,
+      difficulty_level,
+    },
+    identity_meta,
+    source_asset_meta,
+    reference_asset_meta,
+    prev_chunk_meta,
+    identity_error,
+    source_asset_error,
+    reference_asset_error,
+    prev_chunk_error,
+  }
+}
+
 async function handleRenderChunkJob(payload: RenderChunkPayload) {
   const now = new Date().toISOString()
   const jobId = payload.job_id
@@ -1319,7 +1667,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
 
   const chunkRow = await supabaseServer
     .from('sequence_chunks')
-    .select('id, scene_id, render_status')
+    .select('id, scene_id, chunk_index, render_status, identity_score, style_score')
     .eq('id', chunkId)
     .maybeSingle()
 
@@ -1348,7 +1696,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
 
   const sceneRow = await supabaseServer
     .from('sequence_scenes')
-    .select('id, sequence_id')
+    .select('id, sequence_id, scene_index, difficulty_level')
     .eq('id', String(chunkRow.data.scene_id))
     .maybeSingle()
   if (sceneRow.error || !sceneRow.data?.sequence_id) {
@@ -1376,7 +1724,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
 
   const seqRow = await supabaseServer
     .from('sequences')
-    .select('id, project_id')
+    .select('id, project_id, source_asset_id, duration_sec, fps, width, height')
     .eq('id', String(sceneRow.data.sequence_id))
     .maybeSingle()
   const resolvedProjectId = String(seqRow.data?.project_id ?? '').trim()
@@ -1512,6 +1860,34 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     message: 'Render chunk started',
     payload: { project_id: projectId, chunk_id: chunkId },
   })
+
+  const renderInput = await resolveRenderInputContract({
+    projectId,
+    chunkId,
+    chunk: {
+      id: String(chunkRow.data.id),
+      scene_id: String(chunkRow.data.scene_id),
+      chunk_index: chunkRow.data.chunk_index as number | string | null,
+      identity_score: chunkRow.data.identity_score as number | string | null | undefined,
+      style_score: chunkRow.data.style_score as number | string | null | undefined,
+    },
+    scene: {
+      id: String(sceneRow.data.id),
+      sequence_id: String(sceneRow.data.sequence_id),
+      scene_index: sceneRow.data.scene_index as number | string | null,
+      difficulty_level: sceneRow.data.difficulty_level as string | null | undefined,
+    },
+    sequence: {
+      id: String(seqRow.data!.id),
+      project_id: String(seqRow.data!.project_id),
+      source_asset_id: seqRow.data!.source_asset_id as string | null | undefined,
+      duration_sec: seqRow.data!.duration_sec as number | string | null | undefined,
+      fps: seqRow.data!.fps as number | string | null | undefined,
+      width: seqRow.data!.width as number | string | null | undefined,
+      height: seqRow.data!.height as number | string | null | undefined,
+    },
+  })
+  await safeAddJobEventRenderInputResolved(jobId, renderInput)
 
   const outputPath = `projects/${projectId}/chunks/${chunkId}/render.webp`
   let webpBuffer: Buffer
