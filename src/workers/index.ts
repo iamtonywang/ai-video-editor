@@ -1448,6 +1448,38 @@ function parseQualityGateThresholdForGate(raw: unknown): number | null {
   return null
 }
 
+const AUTO_RERENDER_MAX_ATTEMPT = 3
+
+function parseIdentityAttemptCountForAutoRerender(raw: unknown): number | null {
+  if (raw === null || raw === undefined) return null
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string' && raw.trim() !== '') {
+    const n = Number(raw.trim())
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+async function safeAddAutoRerenderJobEvent(params: {
+  job_id: string
+  level: string
+  step: string
+  message: string
+  payload?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await addJobEvent({
+      job_id: params.job_id,
+      level: params.level,
+      step: params.step,
+      message: params.message,
+      payload: params.payload,
+    })
+  } catch (e) {
+    console.warn(`${params.step} job_events insert failed`, getErrorMessage(e))
+  }
+}
+
 function resolveMeasuredIdentityScoreForGate(params: {
   measuredIdentityScoreOverride: number | null | undefined
   identityScoreRaw: unknown
@@ -1840,6 +1872,232 @@ async function recordRenderChunkQualityGateEvaluation(params: {
   }
 }
 
+async function evaluateAutoRerenderAfterRenderChunk(params: {
+  jobId: string
+  projectId: string
+  chunkId: string
+  normalizedScore: number | null
+  identityAttemptCountRaw: unknown
+}): Promise<void> {
+  const { jobId, projectId, chunkId, normalizedScore, identityAttemptCountRaw } = params
+  const base = { project_id: projectId, chunk_id: chunkId }
+
+  const parsedAttempt = parseIdentityAttemptCountForAutoRerender(identityAttemptCountRaw)
+  if (parsedAttempt === null) {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_skipped',
+      message: 'Auto rerender skipped: identity_attempt_count invalid',
+      payload: {
+        ...base,
+        reason_code: 'AUTO_RERENDER_ATTEMPT_COUNT_INVALID',
+      },
+    })
+    return
+  }
+  const currentAttempt = parsedAttempt
+
+  const identityScore =
+    normalizedScore !== null && Number.isFinite(normalizedScore) ? normalizedScore : null
+
+  if (identityScore === null) {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_skipped',
+      message: 'Auto rerender skipped: identity score not available',
+      payload: {
+        ...base,
+        reason_code: 'AUTO_RERENDER_IDENTITY_SCORE_NOT_AVAILABLE',
+      },
+    })
+    return
+  }
+
+  const gateCfg = await supabaseServer
+    .from('quality_gates')
+    .select('threshold')
+    .eq('project_id', projectId)
+    .eq('gate_type', 'identity')
+    .eq('scope_type', 'chunk')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  const rawThreshold = gateCfg.data?.threshold
+  if (gateCfg.error || !gateCfg.data) {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_skipped',
+      message: 'Auto rerender skipped: quality gate threshold not available',
+      payload: {
+        ...base,
+        identity_score: identityScore,
+        raw_threshold: rawThreshold ?? null,
+        reason_code: 'AUTO_RERENDER_THRESHOLD_NOT_AVAILABLE',
+      },
+    })
+    return
+  }
+
+  const thresholdNum = parseQualityGateThresholdForGate(rawThreshold)
+  if (thresholdNum === null || Number.isNaN(thresholdNum)) {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_skipped',
+      message: 'Auto rerender skipped: quality gate threshold invalid',
+      payload: {
+        ...base,
+        identity_score: identityScore,
+        raw_threshold: rawThreshold ?? null,
+        reason_code: 'AUTO_RERENDER_THRESHOLD_NOT_AVAILABLE',
+      },
+    })
+    return
+  }
+
+  if (identityScore >= thresholdNum) {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_not_required',
+      message: 'Auto rerender not required: identity score meets threshold',
+      payload: {
+        ...base,
+        identity_score: identityScore,
+        threshold: thresholdNum,
+        currentAttempt,
+        maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
+        reason_code: 'IDENTITY_SCORE_MEETS_THRESHOLD',
+      },
+    })
+    return
+  }
+
+  const dupJobs = await supabaseServer
+    .from('jobs')
+    .select('id')
+    .eq('chunk_id', chunkId)
+    .eq('job_type', 'render_chunk')
+    .in('status', ['queued', 'running'])
+    .limit(1)
+    .maybeSingle()
+
+  if (dupJobs.error) {
+    console.warn('evaluateAutoRerenderAfterRenderChunk dup jobs query failed', dupJobs.error.message)
+  } else if (dupJobs.data?.id != null && String(dupJobs.data.id).trim() !== '') {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_already_running',
+      message: 'Auto rerender candidate skipped: render_chunk job already queued or running',
+      payload: {
+        ...base,
+        existing_job_id: String(dupJobs.data.id),
+        identity_score: identityScore,
+        threshold: thresholdNum,
+      },
+    })
+    return
+  }
+
+  if (currentAttempt >= AUTO_RERENDER_MAX_ATTEMPT) {
+    const failUpd = await supabaseServer
+      .from('sequence_chunks')
+      .update({ render_status: 'failed' })
+      .eq('id', chunkId)
+      .eq('render_status', 'rendered')
+      .select('id')
+
+    if (failUpd.error) {
+      console.warn('evaluateAutoRerenderAfterRenderChunk failed status update error', failUpd.error.message)
+    }
+    const rows = failUpd.data
+    if (!failUpd.error && Array.isArray(rows) && rows.length > 0) {
+      await safeAddAutoRerenderJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'auto_rerender_max_attempt_reached',
+        message: 'Auto rerender max attempt reached; chunk marked failed',
+        payload: {
+          ...base,
+          currentAttempt,
+          maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
+          identity_score: identityScore,
+          threshold: thresholdNum,
+          reason_code: 'AUTO_RERENDER_MAX_ATTEMPT_REACHED',
+        },
+      })
+    } else {
+      await safeAddAutoRerenderJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'auto_rerender_state_update_skipped',
+        message: 'Auto rerender failed status update skipped: chunk state changed',
+        payload: {
+          ...base,
+          currentAttempt,
+          maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
+          identity_score: identityScore,
+          threshold: thresholdNum,
+          reason_code: 'AUTO_RERENDER_STATE_CHANGED',
+        },
+      })
+    }
+    return
+  }
+
+  const pendUpd = await supabaseServer
+    .from('sequence_chunks')
+    .update({ render_status: 'rerender_pending' })
+    .eq('id', chunkId)
+    .eq('render_status', 'rendered')
+    .select('id')
+
+  if (pendUpd.error) {
+    console.warn(
+      'evaluateAutoRerenderAfterRenderChunk rerender_pending update error',
+      pendUpd.error.message
+    )
+  }
+  const pendRows = pendUpd.data
+  if (!pendUpd.error && Array.isArray(pendRows) && pendRows.length > 0) {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_required',
+      message: 'Auto rerender required: chunk marked rerender_pending',
+      payload: {
+        ...base,
+        currentAttempt,
+        maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
+        identity_score: identityScore,
+        threshold: thresholdNum,
+        reason_code: 'IDENTITY_SCORE_BELOW_THRESHOLD',
+        next_action: 'POST /api/projects/[id]/chunks/[chunkId]/rerender',
+      },
+    })
+  } else {
+    await safeAddAutoRerenderJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'auto_rerender_state_update_skipped',
+      message: 'Auto rerender rerender_pending update skipped: chunk state changed',
+      payload: {
+        ...base,
+        currentAttempt,
+        maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
+        identity_score: identityScore,
+        threshold: thresholdNum,
+        reason_code: 'AUTO_RERENDER_STATE_CHANGED',
+      },
+    })
+  }
+}
+
 async function resolveRenderInputContract(params: {
   projectId: string
   chunkId: string
@@ -2099,7 +2357,9 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
 
   const chunkRow = await supabaseServer
     .from('sequence_chunks')
-    .select('id, scene_id, chunk_index, render_status, identity_score, style_score')
+    .select(
+      'id, scene_id, chunk_index, render_status, identity_score, style_score, identity_attempt_count'
+    )
     .eq('id', chunkId)
     .maybeSingle()
 
@@ -2515,6 +2775,13 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     chunkId,
     identityScoreRaw: chunkRow.data.identity_score,
     measuredIdentityScoreOverride,
+  })
+  await evaluateAutoRerenderAfterRenderChunk({
+    jobId,
+    projectId,
+    chunkId,
+    normalizedScore,
+    identityAttemptCountRaw: chunkRow.data.identity_attempt_count,
   })
   await addJobEvent({
     job_id: jobId,
