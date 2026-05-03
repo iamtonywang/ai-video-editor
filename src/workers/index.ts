@@ -11,6 +11,7 @@ import {
   IDENTITY_MEMORY_MANIFEST_MAX_BYTES,
 } from '@/lib/server/identity/identity-memory-manifest-keys'
 import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
+import { buildRenderChunkProviderInput } from '@/lib/server/render-providers/render-chunk-provider-input'
 import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
@@ -4593,6 +4594,22 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
   await safeAddJobEventRenderInputResolved(jobId, renderInput)
 
   const outputPath = `projects/${projectId}/chunks/${chunkId}/render.webp`
+
+  const providerInputResult = buildRenderChunkProviderInput({
+    jobId,
+    outputAssetKey: outputPath,
+    renderInput,
+  })
+  if (!providerInputResult.ok) {
+    console.warn('[render_chunk] provider input contract build skipped', {
+      job_id: jobId,
+      chunk_id: chunkId,
+      reason: providerInputResult.reason,
+    })
+  } else {
+    void providerInputResult.input
+  }
+
   let webpBuffer: Buffer
   try {
     webpBuffer = await renderChunkDummyWebp({
