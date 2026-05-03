@@ -2618,26 +2618,20 @@ async function recordRenderChunkQualityGateEvaluation(params: {
         return { ok: false, message: res.error.message }
       }
 
-      if (primary === 'passed' && looksLikeDecisionCheckConstraintError(errMsg)) {
+      if (primary === 'passed') {
         await safeAddRenderChunkGateJobEvent({
           job_id: jobId,
           level: 'warn',
-          step: 'render_chunk_identity_gate_decision_fallback',
+          step: 'render_chunk_identity_gate_passed_persist_failed',
           message: errMsg,
           payload: {
             ...basePayload,
-            original_decision: 'passed',
-            fallback_decision: 'blocked',
-            original_reason_code: 'IDENTITY_GATE_PASSED',
-            fallback_reason_code: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED',
+            decision: 'passed',
+            reason_code: 'IDENTITY_GATE_PASSED',
             error_message: errMsg,
           },
         })
-        res = await insertGate('blocked', 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED')
-        if (!res.error) {
-          return { ok: true, finalDecision: 'blocked', finalReason: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED' }
-        }
-        return { ok: false, message: res.error.message }
+        return { ok: false, message: errMsg }
       }
 
       return { ok: false, message: errMsg }
@@ -2646,19 +2640,21 @@ async function recordRenderChunkQualityGateEvaluation(params: {
     const persisted = await tryPersistWithFallback(decision, reasonCode)
     if (!persisted.ok) {
       console.warn('recordRenderChunkQualityGateEvaluation insert failed', persisted.message)
-      await safeAddRenderChunkGateJobEvent({
-        job_id: jobId,
-        level: 'warn',
-        step: 'render_chunk_quality_gate_record_failed',
-        message: persisted.message,
-        payload: {
-          ...basePayload,
-          measured_value: measuredForRow,
-          threshold: thresholdForRow,
-          attempted_decision: decision,
-          error_message: persisted.message,
-        },
-      })
+      if (decision !== 'passed') {
+        await safeAddRenderChunkGateJobEvent({
+          job_id: jobId,
+          level: 'warn',
+          step: 'render_chunk_quality_gate_record_failed',
+          message: persisted.message,
+          payload: {
+            ...basePayload,
+            measured_value: measuredForRow,
+            threshold: thresholdForRow,
+            attempted_decision: decision,
+            error_message: persisted.message,
+          },
+        })
+      }
       return
     }
 
