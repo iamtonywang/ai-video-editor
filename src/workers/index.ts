@@ -1628,6 +1628,149 @@ function emptyPrevChunkMetaForRenderInput(): Record<string, unknown> {
   }
 }
 
+const MAX_RENDER_CHUNK_STATE_JSON_BYTES = 32 * 1024
+
+const RENDER_CHUNK_STATE_OUT_KEY_RE =
+  /^projects\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/chunks\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/state-out\.json$/
+
+function expectedRenderChunkStateOutKey(projectId: string, chunkId: string): string {
+  const pid = String(projectId).trim()
+  const cid = String(chunkId).trim()
+  return `projects/${pid}/chunks/${cid}/state-out.json`
+}
+
+async function safeAddRenderChunkStateKeyJobEvent(params: {
+  job_id: string
+  level: string
+  step: string
+  message: string
+  payload?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await addJobEvent({
+      job_id: params.job_id,
+      level: params.level,
+      step: params.step,
+      message: params.message,
+      payload: params.payload,
+    })
+  } catch (e) {
+    console.warn(`${params.step} job_events insert failed`, getErrorMessage(e))
+  }
+}
+
+async function persistRenderChunkStateOut(params: {
+  jobId: string
+  projectId: string
+  chunkId: string
+  sceneId: string
+  outputPath: string
+  normalizedScore: number | null
+}): Promise<void> {
+  const { jobId, projectId, chunkId, sceneId, outputPath, normalizedScore } = params
+  const stateOutKey = expectedRenderChunkStateOutKey(projectId, chunkId)
+  if (!RENDER_CHUNK_STATE_OUT_KEY_RE.test(stateOutKey)) {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'render_chunk_state_out_invalid_key',
+      message: 'Computed state_out_key does not match required projects/.../chunks/.../state-out.json pattern',
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        computed_key: stateOutKey,
+      },
+    })
+    return
+  }
+
+  const createdAt = new Date().toISOString()
+  const statePayload = {
+    schema_version: 1,
+    type: 'render_chunk_state_out',
+    project_id: projectId,
+    chunk_id: chunkId,
+    scene_id: sceneId,
+    job_id: jobId,
+    output_asset_key: outputPath,
+    identity_score: normalizedScore,
+    render_status: 'rendered',
+    state_source: 'render_chunk_success',
+    created_at: createdAt,
+  }
+  const jsonBody = JSON.stringify(statePayload)
+  const byteSize = Buffer.byteLength(jsonBody, 'utf8')
+  if (byteSize > MAX_RENDER_CHUNK_STATE_JSON_BYTES) {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'render_chunk_state_out_too_large',
+      message: `state-out JSON exceeds ${MAX_RENDER_CHUNK_STATE_JSON_BYTES} bytes`,
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        byte_size: byteSize,
+        max_bytes: MAX_RENDER_CHUNK_STATE_JSON_BYTES,
+      },
+    })
+    return
+  }
+
+  const upload = await supabaseServer.storage
+    .from('project-media')
+    .upload(stateOutKey, Buffer.from(jsonBody, 'utf8'), {
+      contentType: 'application/json',
+      upsert: true,
+    })
+  if (upload.error) {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'render_chunk_state_out_upload_failed',
+      message: upload.error.message,
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        state_out_key: stateOutKey,
+        error: upload.error.message,
+      },
+    })
+    return
+  }
+
+  const keyUpd = await supabaseServer
+    .from('sequence_chunks')
+    .update({ state_out_key: stateOutKey } as Record<string, unknown>)
+    .eq('id', chunkId)
+  if (keyUpd.error) {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'render_chunk_state_out_key_update_failed',
+      message: keyUpd.error.message,
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        state_out_key: stateOutKey,
+        error: keyUpd.error.message,
+      },
+    })
+    return
+  }
+
+  await safeAddRenderChunkStateKeyJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_state_out_recorded',
+    message: 'render_chunk state-out JSON stored and sequence_chunks.state_out_key updated',
+    payload: {
+      project_id: projectId,
+      chunk_id: chunkId,
+      state_out_key: stateOutKey,
+    },
+  })
+}
+
 async function fetchSourceAssetMetaRow(assetId: string): Promise<{
   row: SourceAssetMetaRow | null
   error: string | null
@@ -1704,12 +1847,23 @@ async function safeAddJobEventRenderInputResolved(
   renderInput: Record<string, unknown>
 ): Promise<void> {
   try {
+    const sik = renderInput.state_in_key
+    const pok = renderInput.prev_state_out_key
+    const pcrs = renderInput.prev_chunk_render_status
     await addJobEvent({
       job_id: jobId,
       level: 'info',
       step: 'render_input_resolved',
       message: 'Render input contract resolved',
-      payload: { render_input: renderInput },
+      payload: {
+        render_input: renderInput,
+        state_in_key_present: typeof sik === 'string' && sik.trim() !== '',
+        prev_state_out_key_present: typeof pok === 'string' && pok.trim() !== '',
+        prev_chunk_render_status:
+          pcrs == null || (typeof pcrs === 'string' && pcrs.trim() === '')
+            ? null
+            : String(pcrs),
+      },
     })
   } catch (e) {
     console.warn('render_input_resolved job_events insert failed', getErrorMessage(e))
@@ -3022,6 +3176,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
 }
 
 async function resolveRenderInputContract(params: {
+  jobId: string
   projectId: string
   chunkId: string
   chunk: {
@@ -3047,7 +3202,7 @@ async function resolveRenderInputContract(params: {
     height?: number | string | null
   }
 }): Promise<Record<string, unknown>> {
-  const { projectId, chunkId, chunk, scene, sequence } = params
+  const { jobId, projectId, chunkId, chunk, scene, sequence } = params
   const sceneId = String(chunk.scene_id)
   const sequenceId = String(sequence.id)
   const rawIdx = chunk.chunk_index
@@ -3086,6 +3241,10 @@ async function resolveRenderInputContract(params: {
   let prev_chunk_id: string | null = null
   let prev_chunk_error: string | null = null
   let prev_chunk_meta: Record<string, unknown> = emptyPrevChunkMetaForRenderInput()
+  let stateInKey: string | null = null
+  let prevStateOutKey: string | null = null
+  let prevChunkRenderStatus: string | null = null
+  let stateInKeyUpdateError: string | null = null
 
   const projRow = await supabaseServer
     .from('projects')
@@ -3179,7 +3338,9 @@ async function resolveRenderInputContract(params: {
   if (chunkIndexSafe > 0) {
     const prev = await supabaseServer
       .from('sequence_chunks')
-      .select('id, chunk_index, render_status, output_asset_key, identity_score, style_score')
+      .select(
+        'id, chunk_index, render_status, output_asset_key, identity_score, style_score, state_out_key'
+      )
       .eq('scene_id', sceneId)
       .eq('chunk_index', chunkIndexSafe - 1)
       .maybeSingle()
@@ -3189,15 +3350,64 @@ async function resolveRenderInputContract(params: {
       const pd = prev.data as Record<string, unknown>
       prev_chunk_id = String(pd.id)
       const oak = pd.output_asset_key != null ? String(pd.output_asset_key) : ''
+      const rsRaw = pd.render_status != null ? String(pd.render_status).trim() : ''
+      prevChunkRenderStatus = rsRaw !== '' ? rsRaw : null
       prev_chunk_meta = {
-        render_status:
-          pd.render_status != null && String(pd.render_status).trim() !== ''
-            ? String(pd.render_status)
-            : null,
+        render_status: prevChunkRenderStatus,
         output_asset_key_present: secretKeyPresent(oak),
         output_asset_key_basename: storageKeyBasename(oak || null),
         identity_score: parseNum(pd.identity_score),
         style_score: parseNum(pd.style_score),
+      }
+
+      const rawSok = pd.state_out_key != null ? String(pd.state_out_key).trim() : ''
+      const expectedPrevKey = expectedRenderChunkStateOutKey(projectId, String(pd.id))
+      const allowedPrev = rsRaw === 'rendered' || rsRaw === 'approved'
+
+      if (allowedPrev && rawSok !== '' && rawSok === expectedPrevKey) {
+        prevStateOutKey = rawSok
+        stateInKey = rawSok
+        const inUpd = await supabaseServer
+          .from('sequence_chunks')
+          .update({ state_in_key: rawSok } as Record<string, unknown>)
+          .eq('id', chunkId)
+        if (inUpd.error) {
+          stateInKeyUpdateError = inUpd.error.message
+          stateInKey = null
+          await safeAddRenderChunkStateKeyJobEvent({
+            job_id: jobId,
+            level: 'warn',
+            step: 'render_chunk_state_in_key_update_failed',
+            message: inUpd.error.message,
+            payload: {
+              project_id: projectId,
+              chunk_id: chunkId,
+              prev_chunk_id: prev_chunk_id,
+              state_in_key: rawSok,
+              error: inUpd.error.message,
+            },
+          })
+        }
+      } else {
+        const ignoreReason =
+          allowedPrev && rawSok === ''
+            ? 'missing_state_out_key'
+            : allowedPrev && rawSok !== '' && rawSok !== expectedPrevKey
+              ? 'invalid_state_out_key'
+              : 'wrong_render_status'
+        await safeAddRenderChunkStateKeyJobEvent({
+          job_id: jobId,
+          level: 'info',
+          step: 'prev_state_out_ignored',
+          message: 'Previous chunk state_out_key not applied as state_in_key',
+          payload: {
+            project_id: projectId,
+            chunk_id: chunkId,
+            prev_chunk_id: String(pd.id),
+            reason: ignoreReason,
+            prev_render_status: prevChunkRenderStatus,
+          },
+        })
       }
     }
   }
@@ -3236,6 +3446,10 @@ async function resolveRenderInputContract(params: {
     source_asset_error,
     reference_asset_error,
     prev_chunk_error,
+    state_in_key: stateInKey,
+    prev_state_out_key: prevStateOutKey,
+    prev_chunk_render_status: prevChunkRenderStatus,
+    ...(stateInKeyUpdateError != null ? { state_in_key_update_error: stateInKeyUpdateError } : {}),
   }
 }
 
@@ -3477,6 +3691,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
   })
 
   const renderInput = await resolveRenderInputContract({
+    jobId,
     projectId,
     chunkId,
     chunk: {
@@ -3776,6 +3991,15 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       : normalizedScore !== null
         ? 'pixel_fallback'
         : 'unavailable'
+
+  await persistRenderChunkStateOut({
+    jobId,
+    projectId,
+    chunkId,
+    sceneId: String(sceneRow.data.id),
+    outputPath,
+    normalizedScore,
+  })
 
   await recordRenderChunkQualityGateEvaluation({
     jobId,
