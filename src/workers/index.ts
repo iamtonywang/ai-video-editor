@@ -1,8 +1,10 @@
+import { randomUUID } from 'crypto'
 import { Worker } from 'bullmq'
 import sharp from 'sharp'
 import { jobQueue, QUEUE_NAMES } from '@/lib/queue'
 import { redisConnection } from '@/lib/queue/redis'
 import { enqueueRenderChunkRerenderJob } from '@/lib/server/enqueue-render-chunk-rerender'
+import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
 import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
@@ -74,6 +76,35 @@ async function addJobEvent(params: {
     payload: params.payload ?? null,
   })
   assertDbResult('job_events_insert_failed', result)
+}
+
+async function safeBuildIdentityJobEvent(params: {
+  job_id: string
+  level: string
+  step: string
+  message: string
+  payload?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await addJobEvent(params)
+  } catch (e) {
+    console.warn(`build_identity job_events ${params.step} failed`, getErrorMessage(e))
+  }
+}
+
+async function tryRemoveProjectMediaPaths(
+  paths: string[]
+): Promise<{ ok: boolean; error?: string }> {
+  if (paths.length === 0) return { ok: true }
+  try {
+    const { error } = await supabaseServer.storage.from('project-media').remove(paths)
+    if (error) {
+      return { ok: false, error: error.message }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: getErrorMessage(e) }
+  }
 }
 
 async function updateAnalyzeJobStatus(params: {
@@ -597,27 +628,293 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       message: 'Build identity worker received job',
     })
 
-    // Mock build_identity phase for this step.
-    await new Promise((resolve) => setTimeout(resolve, 300))
-
     if (payload.force_fail) {
       throw new Error('BUILD_IDENTITY_FORCED_FAILURE')
+    }
+
+    const serviceUrlRaw = process.env.IDENTITY_EMBEDDING_SERVICE_URL ?? ''
+    const serviceUrl = typeof serviceUrlRaw === 'string' ? serviceUrlRaw.trim() : ''
+    if (!serviceUrl) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_embedding_service_unconfigured',
+        message: 'IDENTITY_EMBEDDING_SERVICE_URL is not set',
+        payload: { error_code: 'IDENTITY_EMBEDDING_SERVICE_URL_MISSING' },
+      })
+      throw new Error('IDENTITY_EMBEDDING_SERVICE_URL_MISSING')
+    }
+
+    const refId = String(payload.reference_asset_id ?? '').trim()
+    if (!refId || !isValidUuid(refId)) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_invalid',
+        message: 'reference_asset_id is missing or not a valid UUID',
+        payload: { error_code: 'BUILD_IDENTITY_REFERENCE_ID_INVALID', reference_asset_id: refId },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_ID_INVALID')
+    }
+
+    const refRes = await supabaseServer
+      .from('source_assets')
+      .select('id, project_id, asset_type, asset_key, asset_status, validation_status')
+      .eq('id', refId)
+      .maybeSingle()
+
+    if (refRes.error || !refRes.data) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_asset_missing',
+        message: refRes.error?.message ?? 'source_assets row not found',
+        payload: {
+          error_code: 'BUILD_IDENTITY_REFERENCE_ASSET_MISSING',
+          reference_asset_id: refId,
+        },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_ASSET_MISSING')
+    }
+
+    const ra = refRes.data as Record<string, unknown>
+    const rowProjectId = String(ra.project_id ?? '').trim()
+    if (rowProjectId !== String(payload.project_id).trim()) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_project_mismatch',
+        message: 'reference asset project_id does not match job project_id',
+        payload: {
+          error_code: 'BUILD_IDENTITY_REFERENCE_PROJECT_MISMATCH',
+          reference_asset_id: refId,
+          expected_project_id: payload.project_id,
+          row_project_id: rowProjectId,
+        },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_PROJECT_MISMATCH')
+    }
+
+    if (String(ra.asset_type ?? '').trim() !== 'reference') {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_type_invalid',
+        message: 'source_assets.asset_type must be reference',
+        payload: {
+          error_code: 'BUILD_IDENTITY_REFERENCE_TYPE_INVALID',
+          reference_asset_id: refId,
+          asset_type: ra.asset_type ?? null,
+        },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_TYPE_INVALID')
+    }
+
+    const assetKey = ra.asset_key == null ? '' : String(ra.asset_key).trim()
+    if (!assetKey) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_key_missing',
+        message: 'source_assets.asset_key is empty',
+        payload: { error_code: 'BUILD_IDENTITY_REFERENCE_KEY_MISSING', reference_asset_id: refId },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_KEY_MISSING')
+    }
+
+    const vs = ra.validation_status == null ? '' : String(ra.validation_status).trim()
+    const ast = ra.asset_status == null ? '' : String(ra.asset_status).trim()
+    const statusOk = vs === 'validated' || ast === 'validated' || ast === 'active'
+    if (!statusOk) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_status_invalid',
+        message: 'reference asset is not validated or active',
+        payload: {
+          error_code: 'BUILD_IDENTITY_REFERENCE_STATUS_INVALID',
+          reference_asset_id: refId,
+          validation_status: vs || null,
+          asset_status: ast || null,
+        },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_STATUS_INVALID')
+    }
+
+    const dl = await supabaseServer.storage.from('project-media').download(assetKey)
+    if (dl.error || !dl.data) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_reference_download_failed',
+        message: dl.error?.message ?? 'NO_FILE_DATA',
+        payload: {
+          error_code: 'BUILD_IDENTITY_REFERENCE_STORAGE_DOWNLOAD_FAILED',
+          asset_key: assetKey,
+        },
+      })
+      throw new Error('BUILD_IDENTITY_REFERENCE_STORAGE_DOWNLOAD_FAILED')
+    }
+
+    const referenceBuffer = Buffer.from(await dl.data.arrayBuffer())
+    const imageBase64 = referenceBuffer.toString('base64')
+
+    let embedResult: Awaited<ReturnType<typeof callIdentityEmbeddingEmbed>>
+    try {
+      embedResult = await callIdentityEmbeddingEmbed({
+        imageBase64,
+        serviceUrl,
+      })
+    } catch (e) {
+      const em = getErrorMessage(e)
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_embedding_service_failed',
+        message: em,
+        payload: { error_code: 'BUILD_IDENTITY_EMBEDDING_SERVICE_FAILED', detail: em },
+      })
+      throw e
+    }
+
+    if (embedResult.face_count === 0) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_embedding_no_face',
+        message: 'face_count is zero',
+        payload: { error_code: 'BUILD_IDENTITY_EMBEDDING_FACE_COUNT_ZERO', face_count: 0 },
+      })
+      throw new Error('BUILD_IDENTITY_EMBEDDING_FACE_COUNT_ZERO')
+    }
+
+    const identityProfileId = randomUUID()
+    const baseDir = `projects/${payload.project_id}/identity/${identityProfileId}`
+    const embeddingKeyPath = `${baseDir}/embedding.json`
+    const anchorManifestKeyPath = `${baseDir}/anchor-manifest.json`
+    const latentPlaceholderKeyPath = `${baseDir}/latent-placeholder.json`
+
+    const createdAt = new Date().toISOString()
+
+    const embeddingDoc = {
+      type: 'identity_embedding',
+      reference_asset_id: refId,
+      model_version: embedResult.model_version,
+      embedding: embedResult.embedding,
+      face_count: embedResult.face_count,
+      quality_score: embedResult.quality_score,
+      created_at: createdAt,
+    }
+    const anchorDoc = {
+      type: 'identity_anchor_manifest',
+      reference_asset_id: refId,
+      model_version: embedResult.model_version,
+      face_count: embedResult.face_count,
+      quality_score: embedResult.quality_score,
+      note: 'anchor manifest metadata only; full anchor extraction not implemented in this step',
+      created_at: createdAt,
+    }
+    const latentDoc = {
+      type: 'latent_placeholder_meta',
+      implemented: false,
+      reason: 'latent base generation is not implemented in this step',
+      reference_asset_id: refId,
+      model_version: embedResult.model_version,
+      created_at: createdAt,
+    }
+
+    const jsonBuf = (obj: unknown) => Buffer.from(JSON.stringify(obj), 'utf8')
+
+    const uploadedPaths: string[] = []
+    const uploadOne = async (path: string, body: Buffer) => {
+      const up = await supabaseServer.storage.from('project-media').upload(path, body, {
+        contentType: 'application/json',
+        upsert: false,
+      })
+      if (up.error) {
+        throw new Error(`BUILD_IDENTITY_STORAGE_UPLOAD_FAILED:${path}:${up.error.message}`)
+      }
+      uploadedPaths.push(path)
+    }
+
+    try {
+      await uploadOne(embeddingKeyPath, jsonBuf(embeddingDoc))
+      await uploadOne(anchorManifestKeyPath, jsonBuf(anchorDoc))
+      await uploadOne(latentPlaceholderKeyPath, jsonBuf(latentDoc))
+    } catch (uploadErr) {
+      const uem = getErrorMessage(uploadErr)
+      const rm = await tryRemoveProjectMediaPaths([...uploadedPaths])
+      if (!rm.ok) {
+        await safeBuildIdentityJobEvent({
+          job_id: payload.job_id,
+          level: 'warn',
+          step: 'build_identity_orphan_artifacts',
+          message: 'Partial identity artifacts upload failed and cleanup remove failed or incomplete',
+          payload: {
+            error_code: 'BUILD_IDENTITY_ORPHAN_ARTIFACTS',
+            uploaded_paths: uploadedPaths,
+            removal_error: rm.error ?? null,
+            upload_error: uem,
+          },
+        })
+      }
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_storage_upload_failed',
+        message: uem,
+        payload: {
+          error_code: 'BUILD_IDENTITY_STORAGE_UPLOAD_FAILED',
+          paths_attempted: [embeddingKeyPath, anchorManifestKeyPath, latentPlaceholderKeyPath],
+          paths_uploaded_before_fail: uploadedPaths,
+        },
+      })
+      throw uploadErr
     }
 
     const createIdentity = await supabaseServer
       .from('identity_profiles')
       .insert({
+        id: identityProfileId,
         project_id: payload.project_id,
-        reference_asset_id: payload.reference_asset_id,
-        embedding_key: payload.embedding_key,
-        latent_base_key: payload.latent_base_key,
-        anchor_manifest_key: payload.anchor_manifest_key,
-        identity_status: payload.identity_status,
-        build_score: payload.build_score,
+        reference_asset_id: refId,
+        embedding_key: embeddingKeyPath,
+        latent_base_key: latentPlaceholderKeyPath,
+        anchor_manifest_key: anchorManifestKeyPath,
+        identity_status: 'ready',
+        build_score: embedResult.quality_score,
       })
       .select('id')
       .single()
+
     if (createIdentity.error) {
+      const artifactPaths = [
+        embeddingKeyPath,
+        anchorManifestKeyPath,
+        latentPlaceholderKeyPath,
+      ]
+      const rm = await tryRemoveProjectMediaPaths(artifactPaths)
+      if (!rm.ok) {
+        await safeBuildIdentityJobEvent({
+          job_id: payload.job_id,
+          level: 'warn',
+          step: 'build_identity_orphan_artifacts',
+          message: 'identity_profiles insert failed; storage cleanup remove failed or incomplete',
+          payload: {
+            error_code: 'BUILD_IDENTITY_ORPHAN_ARTIFACTS',
+            uploaded_paths: artifactPaths,
+            removal_error: rm.error ?? null,
+            insert_error: createIdentity.error.message,
+          },
+        })
+      }
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_identity_profiles_insert_failed',
+        message: createIdentity.error.message,
+        payload: { error_code: 'BUILD_IDENTITY_IDENTITY_PROFILES_INSERT_FAILED' },
+      })
       throw new Error(`identity_profiles_insert_failed: ${createIdentity.error.message}`)
     }
 
@@ -630,6 +927,16 @@ async function handleBuildIdentityJob(payload: BuildIdentityPayload) {
       .select('id')
       .single()
     if (updateProjectActiveIdentity.error) {
+      await safeBuildIdentityJobEvent({
+        job_id: payload.job_id,
+        level: 'error',
+        step: 'build_identity_active_project_update_failed',
+        message: updateProjectActiveIdentity.error.message,
+        payload: {
+          error_code: 'BUILD_IDENTITY_ACTIVE_PROJECT_UPDATE_FAILED',
+          identity_profile_id: createIdentity.data.id,
+        },
+      })
       throw new Error(
         `projects_active_identity_update_failed: ${updateProjectActiveIdentity.error.message}`
       )
