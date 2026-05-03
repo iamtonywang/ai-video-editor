@@ -1664,10 +1664,26 @@ async function persistRenderChunkStateOut(params: {
   projectId: string
   chunkId: string
   sceneId: string
+  sequenceId: string
   outputPath: string
   normalizedScore: number | null
 }): Promise<void> {
   const { jobId, projectId, chunkId, sceneId, outputPath, normalizedScore } = params
+  const sequenceIdNorm = String(params.sequenceId ?? '').trim()
+  if (!sequenceIdNorm || !isValidUuid(sequenceIdNorm)) {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'render_chunk_state_out_sequence_id_missing',
+      message: 'sequence_id missing or invalid; state-out JSON not persisted',
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+      },
+    })
+    return
+  }
+
   const stateOutKey = expectedRenderChunkStateOutKey(projectId, chunkId)
   if (!RENDER_CHUNK_STATE_OUT_KEY_RE.test(stateOutKey)) {
     await safeAddRenderChunkStateKeyJobEvent({
@@ -1691,6 +1707,7 @@ async function persistRenderChunkStateOut(params: {
     project_id: projectId,
     chunk_id: chunkId,
     scene_id: sceneId,
+    sequence_id: sequenceIdNorm,
     job_id: jobId,
     output_asset_key: outputPath,
     identity_score: normalizedScore,
@@ -1769,6 +1786,81 @@ async function persistRenderChunkStateOut(params: {
       state_out_key: stateOutKey,
     },
   })
+}
+
+type PrevStateOutConsistencyFailReason =
+  | 'schema_invalid'
+  | 'project_mismatch'
+  | 'chunk_mismatch'
+  | 'scene_mismatch'
+  | 'sequence_mismatch'
+  | 'parse_failed'
+  | 'download_failed'
+  | 'too_large'
+  | 'missing_sequence_id'
+
+function normStateOutCompareId(v: unknown): string {
+  return String(v ?? '').trim()
+}
+
+async function verifyPrevChunkStateOutForSequenceConsistency(params: {
+  storageKey: string
+  projectId: string
+  prevChunkId: string
+  sceneId: string
+  sequenceId: string
+}): Promise<{ ok: true } | { ok: false; reason: PrevStateOutConsistencyFailReason }> {
+  const { storageKey, projectId, prevChunkId, sceneId, sequenceId } = params
+  const dl = await supabaseServer.storage.from('project-media').download(storageKey)
+  if (dl.error || !dl.data) {
+    return { ok: false, reason: 'download_failed' }
+  }
+  let buf: Buffer
+  try {
+    buf = Buffer.from(await dl.data.arrayBuffer())
+  } catch {
+    return { ok: false, reason: 'download_failed' }
+  }
+  if (buf.length > MAX_RENDER_CHUNK_STATE_JSON_BYTES) {
+    return { ok: false, reason: 'too_large' }
+  }
+  let obj: unknown
+  try {
+    obj = JSON.parse(buf.toString('utf8')) as unknown
+  } catch {
+    return { ok: false, reason: 'parse_failed' }
+  }
+  if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) {
+    return { ok: false, reason: 'schema_invalid' }
+  }
+  const o = obj as Record<string, unknown>
+  if (o.schema_version !== 1) {
+    return { ok: false, reason: 'schema_invalid' }
+  }
+  if (normStateOutCompareId(o.type) !== 'render_chunk_state_out') {
+    return { ok: false, reason: 'schema_invalid' }
+  }
+  if (normStateOutCompareId(o.project_id) !== normStateOutCompareId(projectId)) {
+    return { ok: false, reason: 'project_mismatch' }
+  }
+  if (normStateOutCompareId(o.chunk_id) !== normStateOutCompareId(prevChunkId)) {
+    return { ok: false, reason: 'chunk_mismatch' }
+  }
+  if (normStateOutCompareId(o.scene_id) !== normStateOutCompareId(sceneId)) {
+    return { ok: false, reason: 'scene_mismatch' }
+  }
+  const seqRaw = o.sequence_id
+  if (seqRaw == null || normStateOutCompareId(seqRaw) === '') {
+    return { ok: false, reason: 'missing_sequence_id' }
+  }
+  if (normStateOutCompareId(seqRaw) !== normStateOutCompareId(sequenceId)) {
+    return { ok: false, reason: 'sequence_mismatch' }
+  }
+  const oak = o.output_asset_key
+  if (oak == null || normStateOutCompareId(oak) === '') {
+    return { ok: false, reason: 'schema_invalid' }
+  }
+  return { ok: true }
 }
 
 async function fetchSourceAssetMetaRow(assetId: string): Promise<{
@@ -1850,6 +1942,9 @@ async function safeAddJobEventRenderInputResolved(
     const sik = renderInput.state_in_key
     const pok = renderInput.prev_state_out_key
     const pcrs = renderInput.prev_chunk_render_status
+    const pChecked = renderInput.prev_state_out_consistency_checked
+    const pPassed = renderInput.prev_state_out_consistency_passed
+    const pFailReason = renderInput.prev_state_out_consistency_failure_reason
     await addJobEvent({
       job_id: jobId,
       level: 'info',
@@ -1863,6 +1958,11 @@ async function safeAddJobEventRenderInputResolved(
           pcrs == null || (typeof pcrs === 'string' && pcrs.trim() === '')
             ? null
             : String(pcrs),
+        prev_state_out_consistency_checked: pChecked === true,
+        prev_state_out_consistency_passed: pPassed === true,
+        ...(typeof pFailReason === 'string' && pFailReason.trim() !== ''
+          ? { prev_state_out_consistency_failure_reason: String(pFailReason).trim() }
+          : {}),
       },
     })
   } catch (e) {
@@ -3245,6 +3345,9 @@ async function resolveRenderInputContract(params: {
   let prevStateOutKey: string | null = null
   let prevChunkRenderStatus: string | null = null
   let stateInKeyUpdateError: string | null = null
+  let prevStateOutConsistencyChecked = false
+  let prevStateOutConsistencyPassed = false
+  let prevStateOutConsistencyFailureReason: string | null = null
 
   const projRow = await supabaseServer
     .from('projects')
@@ -3366,27 +3469,90 @@ async function resolveRenderInputContract(params: {
 
       if (allowedPrev && rawSok !== '' && rawSok === expectedPrevKey) {
         prevStateOutKey = rawSok
-        stateInKey = rawSok
-        const inUpd = await supabaseServer
-          .from('sequence_chunks')
-          .update({ state_in_key: rawSok } as Record<string, unknown>)
-          .eq('id', chunkId)
-        if (inUpd.error) {
-          stateInKeyUpdateError = inUpd.error.message
-          stateInKey = null
+        prevStateOutConsistencyChecked = true
+        const seqCur = String(sequenceId).trim()
+        if (!seqCur || !isValidUuid(seqCur)) {
+          prevStateOutConsistencyFailureReason = 'sequence_mismatch'
           await safeAddRenderChunkStateKeyJobEvent({
             job_id: jobId,
             level: 'warn',
-            step: 'render_chunk_state_in_key_update_failed',
-            message: inUpd.error.message,
+            step: 'prev_state_out_consistency_failed',
+            message: 'Current sequence_id is not valid for state-out consistency',
             payload: {
               project_id: projectId,
               chunk_id: chunkId,
-              prev_chunk_id: prev_chunk_id,
-              state_in_key: rawSok,
-              error: inUpd.error.message,
+              prev_chunk_id: String(pd.id),
+              state_out_key: rawSok,
+              reason: 'sequence_mismatch',
+              sequence_id_current_valid: false,
             },
           })
+        } else {
+          const ver = await verifyPrevChunkStateOutForSequenceConsistency({
+            storageKey: rawSok,
+            projectId,
+            prevChunkId: String(pd.id),
+            sceneId,
+            sequenceId: seqCur,
+          })
+          if (!ver.ok) {
+            prevStateOutConsistencyFailureReason = ver.reason
+            await safeAddRenderChunkStateKeyJobEvent({
+              job_id: jobId,
+              level: 'warn',
+              step: 'prev_state_out_consistency_failed',
+              message: `Previous state-out consistency check failed: ${ver.reason}`,
+              payload: {
+                project_id: projectId,
+                chunk_id: chunkId,
+                prev_chunk_id: String(pd.id),
+                state_out_key: rawSok,
+                reason: ver.reason,
+              },
+            })
+          } else {
+            const inUpd = await supabaseServer
+              .from('sequence_chunks')
+              .update({ state_in_key: rawSok } as Record<string, unknown>)
+              .eq('id', chunkId)
+              .eq('render_status', 'running')
+              .select('id')
+            if (inUpd.error) {
+              stateInKeyUpdateError = inUpd.error.message
+              await safeAddRenderChunkStateKeyJobEvent({
+                job_id: jobId,
+                level: 'warn',
+                step: 'render_chunk_state_in_key_update_failed',
+                message: inUpd.error.message,
+                payload: {
+                  project_id: projectId,
+                  chunk_id: chunkId,
+                  prev_chunk_id: prev_chunk_id,
+                  state_in_key: rawSok,
+                  error: inUpd.error.message,
+                },
+              })
+            } else {
+              const rows = inUpd.data
+              const rowCount = Array.isArray(rows) ? rows.length : 0
+              if (rowCount === 0) {
+                await safeAddRenderChunkStateKeyJobEvent({
+                  job_id: jobId,
+                  level: 'info',
+                  step: 'render_chunk_state_in_key_update_skipped',
+                  message: 'state_in_key update skipped: chunk not in running status',
+                  payload: {
+                    project_id: projectId,
+                    chunk_id: chunkId,
+                    reason: 'chunk_not_running',
+                  },
+                })
+              } else {
+                stateInKey = rawSok
+                prevStateOutConsistencyPassed = true
+              }
+            }
+          }
         }
       } else {
         const ignoreReason =
@@ -3449,6 +3615,11 @@ async function resolveRenderInputContract(params: {
     state_in_key: stateInKey,
     prev_state_out_key: prevStateOutKey,
     prev_chunk_render_status: prevChunkRenderStatus,
+    prev_state_out_consistency_checked: prevStateOutConsistencyChecked,
+    prev_state_out_consistency_passed: prevStateOutConsistencyPassed,
+    ...(prevStateOutConsistencyFailureReason != null
+      ? { prev_state_out_consistency_failure_reason: prevStateOutConsistencyFailureReason }
+      : {}),
     ...(stateInKeyUpdateError != null ? { state_in_key_update_error: stateInKeyUpdateError } : {}),
   }
 }
@@ -3997,6 +4168,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     projectId,
     chunkId,
     sceneId: String(sceneRow.data.id),
+    sequenceId: String(seqRow.data!.id),
     outputPath,
     normalizedScore,
   })
