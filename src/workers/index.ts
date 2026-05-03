@@ -2173,6 +2173,293 @@ function normalizeRenderChunkIdentityScoreForPersist(score: number): number | nu
   return Math.round(clamped * 100) / 100
 }
 
+const STABLE_IDENTITY_WINDOW_LIMIT = 3
+
+type StableIdentitySkipReasonKey =
+  | 'key_mismatch'
+  | 'download_failed'
+  | 'too_large'
+  | 'parse_failed'
+  | 'snapshot_missing'
+  | 'score_invalid'
+  | 'drift_not_false'
+
+function emptyStableIdentitySkipReasonCounts(): Record<StableIdentitySkipReasonKey, number> {
+  return {
+    key_mismatch: 0,
+    download_failed: 0,
+    too_large: 0,
+    parse_failed: 0,
+    snapshot_missing: 0,
+    score_invalid: 0,
+    drift_not_false: 0,
+  }
+}
+
+function parseIdentitySnapshotForStableObservation(snap: unknown): {
+  snapshotObject: boolean
+  scoreFinite: boolean
+  score: number | null
+  driftObservedTrue: boolean
+  driftObservedFalse: boolean
+} {
+  if (snap == null || typeof snap !== 'object' || Array.isArray(snap)) {
+    return {
+      snapshotObject: false,
+      scoreFinite: false,
+      score: null,
+      driftObservedTrue: false,
+      driftObservedFalse: false,
+    }
+  }
+  const o = snap as Record<string, unknown>
+  const driftRaw = o.drift_observed
+  const driftObservedTrue = driftRaw === true
+  const driftObservedFalse = driftRaw === false
+  const sc = o.score
+  let score: number | null = null
+  if (typeof sc === 'number' && Number.isFinite(sc)) {
+    score = sc
+  } else if (typeof sc === 'string' && sc.trim() !== '') {
+    const n = Number(sc.trim())
+    if (Number.isFinite(n)) score = n
+  }
+  const scoreFinite = score != null
+  return {
+    snapshotObject: true,
+    scoreFinite,
+    score,
+    driftObservedTrue,
+    driftObservedFalse,
+  }
+}
+
+/**
+ * Read-only: loads prior chunks' state-out identity_snapshot; does not affect gate/rerender.
+ * Never throws; failures are reflected in counts / null stable score.
+ */
+async function observeRenderChunkStableIdentity(params: {
+  jobId: string
+  projectId: string
+  sceneId: string
+  currentChunkId: string
+  currentChunkIndex: number
+  normalizedScore: number | null
+}): Promise<void> {
+  const { jobId, projectId, sceneId, currentChunkId, normalizedScore } = params
+  let currentChunkIndex = params.currentChunkIndex
+  if (!Number.isFinite(currentChunkIndex)) {
+    currentChunkIndex = NaN
+  }
+
+  const current_identity_score =
+    normalizedScore !== null &&
+    typeof normalizedScore === 'number' &&
+    Number.isFinite(normalizedScore)
+      ? normalizedScore
+      : null
+
+  const emit = async (payload: Record<string, unknown>) => {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_chunk_stable_identity_observed',
+      message: 'Stable identity score (read-only window) observed',
+      payload,
+    })
+  }
+
+  try {
+    if (!Number.isFinite(currentChunkIndex)) {
+      await emit({
+        chunk_id: currentChunkId,
+        scene_id: sceneId,
+        window_limit: STABLE_IDENTITY_WINDOW_LIMIT,
+        candidate_count: 0,
+        used_count: 0,
+        skipped_count: 0,
+        excluded_drift_count: 0,
+        stable_identity_score: null,
+        current_identity_score,
+        stable_delta: null,
+        used_chunk_ids: [],
+      })
+      return
+    }
+
+    const hist = await supabaseServer
+      .from('sequence_chunks')
+      .select('id, chunk_index, render_status, state_out_key')
+      .eq('scene_id', sceneId)
+      .lt('chunk_index', currentChunkIndex)
+      .in('render_status', ['rendered', 'approved'])
+      .not('state_out_key', 'is', null)
+      .order('chunk_index', { ascending: false })
+      .limit(STABLE_IDENTITY_WINDOW_LIMIT)
+
+    if (hist.error) {
+      console.warn('observeRenderChunkStableIdentity sequence_chunks read failed', hist.error.message)
+      await emit({
+        chunk_id: currentChunkId,
+        scene_id: sceneId,
+        window_limit: STABLE_IDENTITY_WINDOW_LIMIT,
+        candidate_count: 0,
+        used_count: 0,
+        skipped_count: 0,
+        excluded_drift_count: 0,
+        stable_identity_score: null,
+        current_identity_score,
+        stable_delta: null,
+        used_chunk_ids: [],
+      })
+      return
+    }
+
+    const rows = Array.isArray(hist.data) ? hist.data : []
+    const candidate_count = rows.length
+    let used_count = 0
+    let skipped_count = 0
+    let excluded_drift_count = 0
+    const skipReasonCounts = emptyStableIdentitySkipReasonCounts()
+    const usedScores: number[] = []
+    const used_chunk_ids: string[] = []
+
+    for (const raw of rows) {
+      const row = raw as Record<string, unknown>
+      const cid = row.id != null ? String(row.id).trim() : ''
+      if (!cid || !isValidUuid(cid)) {
+        skipped_count += 1
+        skipReasonCounts.parse_failed += 1
+        continue
+      }
+      const dbKey = row.state_out_key != null ? String(row.state_out_key).trim() : ''
+      const expectedKey = expectedRenderChunkStateOutKey(projectId, cid)
+      if (dbKey === '' || dbKey !== expectedKey) {
+        skipped_count += 1
+        skipReasonCounts.key_mismatch += 1
+        continue
+      }
+
+      const dl = await supabaseServer.storage.from('project-media').download(dbKey)
+      if (dl.error || !dl.data) {
+        skipped_count += 1
+        skipReasonCounts.download_failed += 1
+        continue
+      }
+      let buf: Buffer
+      try {
+        buf = Buffer.from(await dl.data.arrayBuffer())
+      } catch {
+        skipped_count += 1
+        skipReasonCounts.download_failed += 1
+        continue
+      }
+      if (buf.length > MAX_RENDER_CHUNK_STATE_JSON_BYTES) {
+        skipped_count += 1
+        skipReasonCounts.too_large += 1
+        continue
+      }
+      let obj: unknown
+      try {
+        obj = JSON.parse(buf.toString('utf8')) as unknown
+      } catch {
+        skipped_count += 1
+        skipReasonCounts.parse_failed += 1
+        continue
+      }
+      if (obj == null || typeof obj !== 'object' || Array.isArray(obj)) {
+        skipped_count += 1
+        skipReasonCounts.parse_failed += 1
+        continue
+      }
+      const doc = obj as Record<string, unknown>
+      const snap = doc.identity_snapshot
+      const p = parseIdentitySnapshotForStableObservation(snap)
+
+      if (!p.snapshotObject) {
+        skipped_count += 1
+        skipReasonCounts.snapshot_missing += 1
+        continue
+      }
+      if (p.driftObservedTrue) {
+        excluded_drift_count += 1
+        continue
+      }
+      if (p.driftObservedFalse && p.scoreFinite && p.score != null) {
+        used_count += 1
+        usedScores.push(p.score)
+        used_chunk_ids.push(cid)
+        continue
+      }
+      if (!p.driftObservedFalse && !p.driftObservedTrue) {
+        skipped_count += 1
+        skipReasonCounts.drift_not_false += 1
+        continue
+      }
+      skipped_count += 1
+      skipReasonCounts.score_invalid += 1
+    }
+
+    let stable_identity_score: number | null = null
+    if (usedScores.length > 0) {
+      const sum = usedScores.reduce((a, b) => a + b, 0)
+      const mean = sum / usedScores.length
+      stable_identity_score = normalizeRenderChunkIdentityScoreForPersist(mean)
+    }
+
+    const stable_delta =
+      stable_identity_score != null &&
+      current_identity_score != null &&
+      Number.isFinite(stable_identity_score) &&
+      Number.isFinite(current_identity_score)
+        ? Number((current_identity_score - stable_identity_score).toFixed(4))
+        : null
+
+    const skip_reason_counts: Partial<Record<StableIdentitySkipReasonKey, number>> = {}
+    for (const k of Object.keys(skipReasonCounts) as StableIdentitySkipReasonKey[]) {
+      const v = skipReasonCounts[k]
+      if (v > 0) skip_reason_counts[k] = v
+    }
+
+    const payload: Record<string, unknown> = {
+      chunk_id: currentChunkId,
+      scene_id: sceneId,
+      window_limit: STABLE_IDENTITY_WINDOW_LIMIT,
+      candidate_count,
+      used_count,
+      skipped_count,
+      excluded_drift_count,
+      stable_identity_score,
+      current_identity_score,
+      stable_delta,
+      used_chunk_ids,
+    }
+    if (Object.keys(skip_reason_counts).length > 0) {
+      payload.skip_reason_counts = skip_reason_counts
+    }
+    await emit(payload)
+  } catch (e) {
+    console.warn('observeRenderChunkStableIdentity unexpected', getErrorMessage(e))
+    try {
+      await emit({
+        chunk_id: currentChunkId,
+        scene_id: sceneId,
+        window_limit: STABLE_IDENTITY_WINDOW_LIMIT,
+        candidate_count: 0,
+        used_count: 0,
+        skipped_count: 0,
+        excluded_drift_count: 0,
+        stable_identity_score: null,
+        current_identity_score,
+        stable_delta: null,
+        used_chunk_ids: [],
+      })
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** Aligned with `src/app/api/source/upload/route.ts` `MAX_BYTES` (10 MiB). */
 const MAX_IDENTITY_SCORE_IMAGE_BYTES = 10 * 1024 * 1024
 
@@ -4366,6 +4653,22 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     normalizedScore,
     identityScoreSource: identityScoreSourceForGate,
     prevChunkIdentityScore: prevChunkIdentityScoreForSnapshot,
+  })
+
+  const rawChunkIndexStable = chunkRow.data.chunk_index
+  const currentChunkIndexForStable =
+    typeof rawChunkIndexStable === 'number' && Number.isFinite(rawChunkIndexStable)
+      ? rawChunkIndexStable
+      : typeof rawChunkIndexStable === 'string'
+        ? Number(rawChunkIndexStable)
+        : NaN
+  await observeRenderChunkStableIdentity({
+    jobId,
+    projectId,
+    sceneId: String(chunkRow.data.scene_id),
+    currentChunkId: chunkId,
+    currentChunkIndex: currentChunkIndexForStable,
+    normalizedScore,
   })
 
   const gateRecordSummary = await recordRenderChunkQualityGateEvaluation({
