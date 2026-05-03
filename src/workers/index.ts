@@ -1821,6 +1821,343 @@ function normalizeRenderChunkIdentityScoreForPersist(score: number): number | nu
   return Math.round(clamped * 100) / 100
 }
 
+/** Aligned with `src/app/api/source/upload/route.ts` `MAX_BYTES` (10 MiB). */
+const MAX_IDENTITY_SCORE_IMAGE_BYTES = 10 * 1024 * 1024
+
+const MAX_IDENTITY_EMBEDDING_DIMENSIONS = 4096
+
+const MAX_IDENTITY_OUTPUT_PIXELS = 16_000_000
+
+/**
+ * Maps cosine similarity in [-1, 1] to [0, 1] for gate thresholds that assume a 0~1-style score.
+ * No separate product doc defines identity_score bounds; this policy matches pixel scores (0~1).
+ */
+const IDENTITY_COSINE_NORMALIZATION_POLICY =
+  'cosine_similarity in [-1,1] mapped via (cosine + 1) / 2 into [0,1], clamped to [0,1], then normalizeRenderChunkIdentityScoreForPersist (same rounding as pixel path)'
+
+function vectorL2Squared(values: number[]): number {
+  let s = 0
+  for (const v of values) {
+    s += v * v
+  }
+  return s
+}
+
+function cosineSimilarityOrThrow(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) {
+    throw new Error('COSINE_VECTOR_LENGTH_MISMATCH')
+  }
+  let dot = 0
+  let na = 0
+  let nb = 0
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i] ?? 0
+    const y = b[i] ?? 0
+    dot += x * y
+    na += x * x
+    nb += y * y
+  }
+  const denom = Math.sqrt(na) * Math.sqrt(nb)
+  if (denom === 0 || !Number.isFinite(denom)) {
+    throw new Error('COSINE_ZERO_NORM')
+  }
+  const c = dot / denom
+  if (!Number.isFinite(c)) {
+    throw new Error('COSINE_NON_FINITE')
+  }
+  return c
+}
+
+type EmbeddingRenderChunkIdentityScoreOk = {
+  ok: true
+  /** Pre-persist [0,1] score from cosine normalization. */
+  score01: number
+  rawCosine: number
+  referenceModelVersion: string
+  outputModelVersion: string
+  identityProfileId: string
+  embeddingDimensions: number
+  referenceAssetId: string | null
+  referenceSource: 'identity_profile' | 'fallback' | null
+}
+
+type EmbeddingRenderChunkIdentityScoreFail = {
+  ok: false
+  errorCode: string
+  reason: string
+}
+
+type EmbeddingRenderChunkIdentityScoreResult =
+  | EmbeddingRenderChunkIdentityScoreOk
+  | EmbeddingRenderChunkIdentityScoreFail
+
+function parseReferenceEmbeddingVectorFromJsonDoc(
+  doc: Record<string, unknown>
+): { embedding: number[]; modelVersion: string } | null {
+  const mvRaw = doc.model_version
+  if (mvRaw == null || typeof mvRaw !== 'string' || mvRaw.trim() === '') {
+    return null
+  }
+  const modelVersion = mvRaw.trim()
+  const embRaw = doc.embedding
+  if (!Array.isArray(embRaw) || embRaw.length === 0 || embRaw.length > MAX_IDENTITY_EMBEDDING_DIMENSIONS) {
+    return null
+  }
+  const embedding: number[] = []
+  for (let i = 0; i < embRaw.length; i++) {
+    const n = embRaw[i]
+    if (typeof n !== 'number' || !Number.isFinite(n)) {
+      return null
+    }
+    embedding.push(n)
+  }
+  if (vectorL2Squared(embedding) < 1e-12) {
+    return null
+  }
+  return { embedding, modelVersion: modelVersion }
+}
+
+async function resolveIdentityProfileIdForRenderChunk(
+  projectId: string,
+  renderInput: Record<string, unknown>
+): Promise<string | null> {
+  const ipRaw = renderInput.identity_profile_id
+  const ipStr = ipRaw != null && String(ipRaw).trim() !== '' ? String(ipRaw).trim() : ''
+  if (ipStr && isValidUuid(ipStr)) {
+    return ipStr
+  }
+  const pr = await supabaseServer
+    .from('projects')
+    .select('active_identity_profile_id')
+    .eq('id', projectId)
+    .maybeSingle()
+  if (pr.error || !pr.data) {
+    return null
+  }
+  const aid = pr.data.active_identity_profile_id
+  const aidStr = aid != null && String(aid).trim() !== '' ? String(aid).trim() : ''
+  if (aidStr && isValidUuid(aidStr)) {
+    return aidStr
+  }
+  return null
+}
+
+/**
+ * Embedding-based identity score vs reference embedding from identity_profiles.embedding_key JSON.
+ * On any failure returns `{ ok: false }` so callers can fall back to pixel comparison.
+ */
+async function calculateEmbeddingRenderChunkIdentityScore(params: {
+  jobId: string
+  projectId: string
+  chunkId: string
+  renderInput: Record<string, unknown>
+  outputAssetKey: string
+}): Promise<EmbeddingRenderChunkIdentityScoreResult> {
+  const { jobId, projectId, chunkId, renderInput, outputAssetKey } = params
+
+  const fail = (errorCode: string, reason: string): EmbeddingRenderChunkIdentityScoreFail => ({
+    ok: false,
+    errorCode,
+    reason,
+  })
+
+  const serviceUrlRaw = process.env.IDENTITY_EMBEDDING_SERVICE_URL ?? ''
+  const serviceUrl = typeof serviceUrlRaw === 'string' ? serviceUrlRaw.trim() : ''
+  if (!serviceUrl) {
+    return fail('IDENTITY_EMBEDDING_SERVICE_URL_MISSING', 'IDENTITY_EMBEDDING_SERVICE_URL is not set')
+  }
+
+  const profileId = await resolveIdentityProfileIdForRenderChunk(projectId, renderInput)
+  if (!profileId) {
+    return fail('IDENTITY_EMBEDDING_PROFILE_ID_MISSING', 'No identity_profile_id from render input or project')
+  }
+
+  const ipRow = await supabaseServer
+    .from('identity_profiles')
+    .select('id, embedding_key, reference_asset_id, identity_status')
+    .eq('id', profileId)
+    .maybeSingle()
+
+  if (ipRow.error || !ipRow.data) {
+    return fail('IDENTITY_EMBEDDING_PROFILE_ROW_MISSING', ipRow.error?.message ?? 'identity_profiles not found')
+  }
+
+  const row = ipRow.data as Record<string, unknown>
+  const identityStatus = String(row.identity_status ?? '').trim()
+  if (identityStatus !== 'ready') {
+    return fail(
+      'IDENTITY_EMBEDDING_PROFILE_NOT_READY',
+      `identity_status is not ready: ${identityStatus || 'empty'}`
+    )
+  }
+
+  const embeddingKey = row.embedding_key == null ? '' : String(row.embedding_key).trim()
+  if (!embeddingKey) {
+    return fail('IDENTITY_EMBEDDING_KEY_MISSING', 'identity_profiles.embedding_key is empty')
+  }
+
+  const refAssetId =
+    row.reference_asset_id == null || String(row.reference_asset_id).trim() === ''
+      ? null
+      : String(row.reference_asset_id).trim()
+
+  const embDl = await supabaseServer.storage.from('project-media').download(embeddingKey)
+  if (embDl.error || !embDl.data) {
+    return fail(
+      'IDENTITY_EMBEDDING_JSON_DOWNLOAD_FAILED',
+      embDl.error?.message ?? 'NO_FILE_DATA'
+    )
+  }
+
+  let embDoc: Record<string, unknown>
+  try {
+    const txt = Buffer.from(await embDl.data.arrayBuffer()).toString('utf8')
+    embDoc = JSON.parse(txt) as Record<string, unknown>
+  } catch (e) {
+    return fail('IDENTITY_EMBEDDING_JSON_PARSE_FAILED', getErrorMessage(e))
+  }
+
+  const parsedRef = parseReferenceEmbeddingVectorFromJsonDoc(embDoc)
+  if (!parsedRef) {
+    return fail('IDENTITY_REFERENCE_EMBEDDING_VECTOR_INVALID', 'embedding.json embedding or model_version invalid')
+  }
+  const referenceEmbedding = parsedRef.embedding
+  const referenceModelVersion = parsedRef.modelVersion
+
+  const outTrim = typeof outputAssetKey === 'string' ? outputAssetKey.trim() : ''
+  const expectedOutPrefix = `projects/${projectId}/chunks/${chunkId}/`
+  if (!outTrim || !outTrim.startsWith(expectedOutPrefix) || !outTrim.endsWith('render.webp')) {
+    return fail('IDENTITY_OUTPUT_KEY_UNSUPPORTED', 'output asset key is not supported for identity score')
+  }
+
+  const outDl = await supabaseServer.storage.from('project-media').download(outTrim)
+  if (outDl.error || !outDl.data) {
+    return fail(
+      'IDENTITY_OUTPUT_IMAGE_DOWNLOAD_FAILED',
+      outDl.error?.message ?? 'NO_FILE_DATA'
+    )
+  }
+
+  const outBuf = Buffer.from(await outDl.data.arrayBuffer())
+  if (outBuf.length > MAX_IDENTITY_SCORE_IMAGE_BYTES) {
+    return fail(
+      'IDENTITY_OUTPUT_IMAGE_TOO_LARGE',
+      `output image exceeds MAX_IDENTITY_SCORE_IMAGE_BYTES (${MAX_IDENTITY_SCORE_IMAGE_BYTES})`
+    )
+  }
+
+  let meta: { width?: number; height?: number }
+  try {
+    meta = await sharp(outBuf).metadata()
+  } catch (e) {
+    return fail('IDENTITY_OUTPUT_IMAGE_METADATA_FAILED', getErrorMessage(e))
+  }
+  const w = meta.width
+  const h = meta.height
+  if (
+    w == null ||
+    h == null ||
+    !Number.isFinite(w) ||
+    !Number.isFinite(h) ||
+    w <= 0 ||
+    h <= 0
+  ) {
+    return fail('IDENTITY_OUTPUT_IMAGE_METADATA_INVALID', 'width/height missing or invalid')
+  }
+  if (w * h > MAX_IDENTITY_OUTPUT_PIXELS) {
+    return fail(
+      'IDENTITY_OUTPUT_IMAGE_RESOLUTION_TOO_LARGE',
+      `width*height ${w * h} exceeds ${MAX_IDENTITY_OUTPUT_PIXELS}`
+    )
+  }
+
+  const imageBase64 = outBuf.toString('base64')
+
+  let outEmbed: Awaited<ReturnType<typeof callIdentityEmbeddingEmbed>>
+  try {
+    outEmbed = await callIdentityEmbeddingEmbed({
+      imageBase64,
+      serviceUrl,
+    })
+  } catch (e) {
+    return fail('IDENTITY_OUTPUT_EMBEDDING_SERVICE_FAILED', getErrorMessage(e))
+  }
+
+  if (outEmbed.face_count === 0) {
+    return fail('IDENTITY_OUTPUT_EMBEDDING_FACE_COUNT_ZERO', 'output embedding face_count is zero')
+  }
+
+  const outVec = outEmbed.embedding
+  if (
+    !Array.isArray(outVec) ||
+    outVec.length === 0 ||
+    outVec.length > MAX_IDENTITY_EMBEDDING_DIMENSIONS
+  ) {
+    return fail('IDENTITY_OUTPUT_EMBEDDING_VECTOR_INVALID', 'output embedding length invalid')
+  }
+  for (let i = 0; i < outVec.length; i++) {
+    const n = outVec[i]
+    if (typeof n !== 'number' || !Number.isFinite(n)) {
+      return fail('IDENTITY_OUTPUT_EMBEDDING_VECTOR_INVALID', `non-finite at index ${i}`)
+    }
+  }
+  if (vectorL2Squared(outVec) < 1e-12) {
+    return fail('IDENTITY_OUTPUT_EMBEDDING_ZERO_VECTOR', 'output embedding is a zero vector')
+  }
+
+  if (outVec.length !== referenceEmbedding.length) {
+    return fail(
+      'IDENTITY_EMBEDDING_DIMENSION_MISMATCH',
+      `reference dim ${referenceEmbedding.length} vs output dim ${outVec.length}`
+    )
+  }
+
+  const outputModelVersion = outEmbed.model_version.trim()
+  if (referenceModelVersion !== outputModelVersion) {
+    /**
+     * No repo contract or docs require matching model_version for cosine; we warn and continue.
+     * If a future service contract adds a hard requirement, gate that here before cosine.
+     */
+    await safeAddRenderChunkIdentityScoreJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'identity_embedding_model_version_warning',
+      message: 'Reference and output embedding model_version differ; proceeding with cosine per current policy',
+      payload: {
+        reference_model_version: referenceModelVersion,
+        output_model_version: outputModelVersion,
+        action: 'proceed_cosine',
+        reason: 'no_contract_requiring_model_version_match_in_repo',
+      },
+    })
+  }
+
+  let rawCosine: number
+  try {
+    rawCosine = cosineSimilarityOrThrow(referenceEmbedding, outVec)
+  } catch (e) {
+    return fail('IDENTITY_COSINE_SIMILARITY_FAILED', getErrorMessage(e))
+  }
+
+  let score01 = (rawCosine + 1) / 2
+  score01 = Math.max(0, Math.min(1, score01))
+  if (!Number.isFinite(score01)) {
+    return fail('IDENTITY_COSINE_NORMALIZED_NON_FINITE', 'normalized cosine score is not finite')
+  }
+
+  return {
+    ok: true,
+    score01,
+    rawCosine,
+    referenceModelVersion,
+    outputModelVersion,
+    identityProfileId: profileId,
+    embeddingDimensions: referenceEmbedding.length,
+    referenceAssetId: refAssetId,
+    referenceSource: 'identity_profile',
+  }
+}
+
 async function calculateBasicRenderChunkIdentityScore(params: {
   jobId: string
   projectId: string
@@ -3101,22 +3438,98 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     },
   })
 
-  const identityCalc = await calculateBasicRenderChunkIdentityScore({
+  const embeddingScoreResult = await calculateEmbeddingRenderChunkIdentityScore({
     jobId,
     projectId,
     chunkId,
-    outputPath,
     renderInput,
+    outputAssetKey: outputPath,
   })
 
-  const normalizedScore =
-    identityCalc.score !== null && Number.isFinite(identityCalc.score)
-      ? normalizeRenderChunkIdentityScoreForPersist(identityCalc.score)
-      : null
-
+  let identityCalc: BasicRenderChunkIdentityScoreResult
+  let normalizedScore: number | null = null
   let measuredIdentityScoreOverride: number | null = null
-  if (normalizedScore !== null) {
+  let identityEmbeddingUnavailableEventSent = false
+
+  if (embeddingScoreResult.ok) {
+    normalizedScore = normalizeRenderChunkIdentityScoreForPersist(embeddingScoreResult.score01)
     measuredIdentityScoreOverride = normalizedScore
+    identityCalc = {
+      score: embeddingScoreResult.score01,
+      referenceAssetId: embeddingScoreResult.referenceAssetId,
+      referenceSource: embeddingScoreResult.referenceSource,
+    }
+    await safeAddRenderChunkIdentityScoreJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'identity_embedding_score_calculated',
+      message: 'Render chunk identity score calculated from embeddings (cosine)',
+      payload: {
+        project_id: projectId,
+        chunk_id: chunkId,
+        score: embeddingScoreResult.score01,
+        raw_cosine: embeddingScoreResult.rawCosine,
+        normalized_score: normalizedScore,
+        normalization_policy: IDENTITY_COSINE_NORMALIZATION_POLICY,
+        model_version: embeddingScoreResult.referenceModelVersion,
+        output_model_version: embeddingScoreResult.outputModelVersion,
+        identity_profile_id: embeddingScoreResult.identityProfileId,
+        embedding_dimensions: embeddingScoreResult.embeddingDimensions,
+        score_source: 'embedding',
+        output_basename: outputBasename,
+      },
+    })
+  } else {
+    identityCalc = await calculateBasicRenderChunkIdentityScore({
+      jobId,
+      projectId,
+      chunkId,
+      outputPath,
+      renderInput,
+    })
+    normalizedScore =
+      identityCalc.score !== null && Number.isFinite(identityCalc.score)
+        ? normalizeRenderChunkIdentityScoreForPersist(identityCalc.score)
+        : null
+    measuredIdentityScoreOverride = normalizedScore
+
+    if (normalizedScore !== null) {
+      await safeAddRenderChunkIdentityScoreJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'identity_embedding_score_fallback_pixel',
+        message: 'Embedding-based identity score unavailable; using pixel fallback',
+        payload: {
+          project_id: projectId,
+          chunk_id: chunkId,
+          error_code: embeddingScoreResult.errorCode,
+          reason: embeddingScoreResult.reason,
+          score_source: 'pixel_fallback',
+          output_basename: outputBasename,
+        },
+      })
+    } else {
+      identityEmbeddingUnavailableEventSent = true
+      await safeAddRenderChunkIdentityScoreJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'identity_embedding_score_unavailable',
+        message: 'Embedding and pixel identity scores unavailable',
+        payload: {
+          project_id: projectId,
+          chunk_id: chunkId,
+          error_code: embeddingScoreResult.errorCode,
+          reason: embeddingScoreResult.reason,
+          score_source: 'unavailable',
+          pixel_reason_code: identityCalc.reasonCode ?? null,
+          pixel_error_message: identityCalc.errorMessage ?? null,
+          output_basename: outputBasename,
+        },
+      })
+    }
+  }
+
+  if (normalizedScore !== null) {
     const idUpd = await supabaseServer
       .from('sequence_chunks')
       .update({ identity_score: normalizedScore } as Record<string, unknown>)
@@ -3160,27 +3573,29 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     })
   } else {
     measuredIdentityScoreOverride = null
-    const isHardFail = identityCalc.reasonCode === 'IDENTITY_SCORE_CALCULATION_FAILED'
-    await safeAddRenderChunkIdentityScoreJobEvent({
-      job_id: jobId,
-      level: isHardFail ? 'warn' : 'info',
-      step: isHardFail
-        ? 'render_chunk_identity_score_failed'
-        : 'render_chunk_identity_score_skipped',
-      message: isHardFail
-        ? 'Render chunk identity score calculation failed'
-        : 'Render chunk identity score skipped',
-      payload: {
-        project_id: projectId,
-        chunk_id: chunkId,
-        reference_asset_id: identityCalc.referenceAssetId,
-        reference_source: identityCalc.referenceSource,
-        score: null,
-        reason_code: identityCalc.reasonCode ?? null,
-        error_message: identityCalc.errorMessage,
-        output_basename: outputBasename,
-      },
-    })
+    if (!identityEmbeddingUnavailableEventSent) {
+      const isHardFail = identityCalc.reasonCode === 'IDENTITY_SCORE_CALCULATION_FAILED'
+      await safeAddRenderChunkIdentityScoreJobEvent({
+        job_id: jobId,
+        level: isHardFail ? 'warn' : 'info',
+        step: isHardFail
+          ? 'render_chunk_identity_score_failed'
+          : 'render_chunk_identity_score_skipped',
+        message: isHardFail
+          ? 'Render chunk identity score calculation failed'
+          : 'Render chunk identity score skipped',
+        payload: {
+          project_id: projectId,
+          chunk_id: chunkId,
+          reference_asset_id: identityCalc.referenceAssetId,
+          reference_source: identityCalc.referenceSource,
+          score: null,
+          reason_code: identityCalc.reasonCode ?? null,
+          error_message: identityCalc.errorMessage,
+          output_basename: outputBasename,
+        },
+      })
+    }
   }
 
   await recordRenderChunkQualityGateEvaluation({
