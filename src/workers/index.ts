@@ -1629,6 +1629,77 @@ function emptyPrevChunkMetaForRenderInput(): Record<string, unknown> {
   }
 }
 
+/** Normalized for state-out identity_snapshot and job_events only; not used for scoring. */
+type IdentitySnapshotScoreSource = 'embedding' | 'pixel_fallback' | 'unavailable' | 'unknown'
+
+function normalizeIdentitySnapshotScoreSource(raw: unknown): IdentitySnapshotScoreSource {
+  if (raw === 'embedding' || raw === 'pixel_fallback' || raw === 'unavailable') {
+    return raw
+  }
+  return 'unknown'
+}
+
+function parsePrevChunkIdentityScoreFromRenderInput(renderInput: Record<string, unknown>): number | null {
+  const pcm = renderInput.prev_chunk_meta
+  if (pcm == null || typeof pcm !== 'object' || Array.isArray(pcm)) {
+    return null
+  }
+  return parseMeasuredIdentityScoreForGate((pcm as Record<string, unknown>).identity_score)
+}
+
+type RenderChunkIdentitySnapshot = {
+  score: number | null
+  score_source: IdentitySnapshotScoreSource
+  prev_score: number | null
+  delta_from_prev: number | null
+  drift_observed: boolean
+  drift_direction: 'down' | 'up' | 'flat' | 'unknown'
+}
+
+/** Observational only; does not affect gates or rerender. */
+function buildRenderChunkIdentitySnapshot(params: {
+  normalizedScore: number | null
+  identityScoreSourceRaw: unknown
+  prevChunkIdentityScore: number | null
+}): RenderChunkIdentitySnapshot {
+  const score =
+    params.normalizedScore !== null &&
+    typeof params.normalizedScore === 'number' &&
+    Number.isFinite(params.normalizedScore)
+      ? params.normalizedScore
+      : null
+  const score_source = normalizeIdentitySnapshotScoreSource(params.identityScoreSourceRaw)
+  const prev_score =
+    params.prevChunkIdentityScore !== null &&
+    typeof params.prevChunkIdentityScore === 'number' &&
+    Number.isFinite(params.prevChunkIdentityScore)
+      ? params.prevChunkIdentityScore
+      : null
+  let delta_from_prev: number | null = null
+  if (score !== null && prev_score !== null) {
+    delta_from_prev = score - prev_score
+  }
+  const drift_observed = delta_from_prev !== null && delta_from_prev < 0
+  let drift_direction: 'down' | 'up' | 'flat' | 'unknown'
+  if (delta_from_prev === null) {
+    drift_direction = 'unknown'
+  } else if (delta_from_prev < 0) {
+    drift_direction = 'down'
+  } else if (delta_from_prev > 0) {
+    drift_direction = 'up'
+  } else {
+    drift_direction = 'flat'
+  }
+  return {
+    score,
+    score_source,
+    prev_score,
+    delta_from_prev,
+    drift_observed,
+    drift_direction,
+  }
+}
+
 const MAX_RENDER_CHUNK_STATE_JSON_BYTES = 32 * 1024
 
 const RENDER_CHUNK_STATE_OUT_KEY_RE =
@@ -1668,8 +1739,21 @@ async function persistRenderChunkStateOut(params: {
   sequenceId: string
   outputPath: string
   normalizedScore: number | null
+  /** Observability only; same lineage as identityScoreSourceForGate in handleRenderChunkJob. */
+  identityScoreSource?: unknown
+  /** Parsed finite previous-chunk identity score, or null; observability only. */
+  prevChunkIdentityScore?: number | null
 }): Promise<void> {
-  const { jobId, projectId, chunkId, sceneId, outputPath, normalizedScore } = params
+  const {
+    jobId,
+    projectId,
+    chunkId,
+    sceneId,
+    outputPath,
+    normalizedScore,
+    identityScoreSource,
+    prevChunkIdentityScore,
+  } = params
   const sequenceIdNorm = String(params.sequenceId ?? '').trim()
   if (!sequenceIdNorm || !isValidUuid(sequenceIdNorm)) {
     await safeAddRenderChunkStateKeyJobEvent({
@@ -1702,6 +1786,11 @@ async function persistRenderChunkStateOut(params: {
   }
 
   const createdAt = new Date().toISOString()
+  const identity_snapshot = buildRenderChunkIdentitySnapshot({
+    normalizedScore,
+    identityScoreSourceRaw: identityScoreSource,
+    prevChunkIdentityScore: prevChunkIdentityScore ?? null,
+  })
   const statePayload = {
     schema_version: 1,
     type: 'render_chunk_state_out',
@@ -1712,10 +1801,28 @@ async function persistRenderChunkStateOut(params: {
     job_id: jobId,
     output_asset_key: outputPath,
     identity_score: normalizedScore,
+    identity_snapshot,
     render_status: 'rendered',
     state_source: 'render_chunk_success',
     created_at: createdAt,
   }
+
+  await safeAddRenderChunkStateKeyJobEvent({
+    job_id: jobId,
+    level: 'info',
+    step: 'render_chunk_identity_snapshot_recorded',
+    message: 'Identity snapshot recorded for observability',
+    payload: {
+      chunk_id: chunkId,
+      score: identity_snapshot.score,
+      score_source: identity_snapshot.score_source,
+      prev_score: identity_snapshot.prev_score,
+      delta_from_prev: identity_snapshot.delta_from_prev,
+      drift_observed: identity_snapshot.drift_observed,
+      drift_direction: identity_snapshot.drift_direction,
+    },
+  })
+
   const jsonBody = JSON.stringify(statePayload)
   const byteSize = Buffer.byteLength(jsonBody, 'utf8')
   if (byteSize > MAX_RENDER_CHUNK_STATE_JSON_BYTES) {
@@ -4247,6 +4354,8 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
         ? 'pixel_fallback'
         : 'unavailable'
 
+  const prevChunkIdentityScoreForSnapshot = parsePrevChunkIdentityScoreFromRenderInput(renderInput)
+
   await persistRenderChunkStateOut({
     jobId,
     projectId,
@@ -4255,6 +4364,8 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     sequenceId: String(seqRow.data!.id),
     outputPath,
     normalizedScore,
+    identityScoreSource: identityScoreSourceForGate,
+    prevChunkIdentityScore: prevChunkIdentityScoreForSnapshot,
   })
 
   const gateRecordSummary = await recordRenderChunkQualityGateEvaluation({
