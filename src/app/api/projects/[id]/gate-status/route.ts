@@ -5,7 +5,7 @@ type RouteContext = {
   params: Promise<{ id: string }>
 }
 
-type GateUiStatus = 'passed' | 'blocked' | 'no_gate'
+type GateUiStatus = 'passed' | 'blocked' | 'rerender_required' | 'no_gate'
 
 type GateEvaluationScopeRow = {
   project_id: string
@@ -38,7 +38,7 @@ function isValidProjectUuid(projectId: string): boolean {
 }
 
 function normalizeGateUiStatus(decision: string | null | undefined): GateUiStatus {
-  if (decision === 'passed' || decision === 'blocked') {
+  if (decision === 'passed' || decision === 'blocked' || decision === 'rerender_required') {
     return decision
   }
   return 'no_gate'

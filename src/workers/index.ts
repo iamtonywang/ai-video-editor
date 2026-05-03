@@ -1,7 +1,8 @@
 import { Worker } from 'bullmq'
 import sharp from 'sharp'
+import { jobQueue, QUEUE_NAMES } from '@/lib/queue'
 import { redisConnection } from '@/lib/queue/redis'
-import { QUEUE_NAMES } from '@/lib/queue'
+import { enqueueRenderChunkRerenderJob } from '@/lib/server/enqueue-render-chunk-rerender'
 import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
@@ -1718,6 +1719,8 @@ async function safeAddRenderChunkIdentityScoreJobEvent(params: {
   }
 }
 
+type ChunkIdentityGateDecision = 'passed' | 'rerender_required' | 'blocked'
+
 async function recordRenderChunkQualityGateEvaluation(params: {
   jobId: string
   projectId: string
@@ -1737,10 +1740,6 @@ async function recordRenderChunkQualityGateEvaluation(params: {
       measuredIdentityScoreOverride,
       identityScoreRaw,
     })
-    const reasonCodeRecorded =
-      measuredValue === null
-        ? 'RENDER_CHUNK_IDENTITY_SCORE_NOT_MEASURED'
-        : 'RENDER_CHUNK_IDENTITY_GATE_RECORDED'
 
     const gateCfg = await supabaseServer
       .from('quality_gates')
@@ -1785,70 +1784,138 @@ async function recordRenderChunkQualityGateEvaluation(params: {
       return
     }
 
-    const dup = await supabaseServer
+    const latestRow = await supabaseServer
       .from('gate_evaluations')
       .select('id')
       .eq('project_id', projectId)
       .eq('chunk_id', chunkId)
       .eq('gate_type', 'identity')
       .eq('scope_type', 'chunk')
+      .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
 
-    if (dup.error) {
+    if (latestRow.error) {
       console.warn(
-        'recordRenderChunkQualityGateEvaluation duplicate check failed',
-        dup.error.message
+        'recordRenderChunkQualityGateEvaluation latest row read failed',
+        latestRow.error.message
       )
       await safeAddRenderChunkGateJobEvent({
         job_id: jobId,
         level: 'warn',
         step: 'render_chunk_quality_gate_record_failed',
-        message: 'Duplicate check failed for chunk quality gate',
+        message: 'Latest gate_evaluations row read failed',
         payload: {
           ...basePayload,
-          error_message: dup.error.message,
+          error_message: latestRow.error.message,
         },
       })
       return
     }
 
-    if (dup.data?.id) {
+    const existingEvaluationId =
+      latestRow.data?.id != null && String(latestRow.data.id).trim() !== ''
+        ? String(latestRow.data.id)
+        : null
+
+    const primaryDecision: ChunkIdentityGateDecision =
+      measuredValue === null
+        ? 'blocked'
+        : measuredValue >= thresholdNum
+          ? 'passed'
+          : 'rerender_required'
+
+    const primaryReasonCode: string | null =
+      measuredValue === null
+        ? 'RENDER_CHUNK_IDENTITY_SCORE_NOT_MEASURED'
+        : primaryDecision === 'passed'
+          ? null
+          : 'IDENTITY_SCORE_BELOW_THRESHOLD'
+
+    const writeRow = async (
+      decision: ChunkIdentityGateDecision,
+      reason_code: string | null
+    ) => {
+      if (existingEvaluationId) {
+        return await supabaseServer
+          .from('gate_evaluations')
+          .update({
+            measured_value: measuredValue,
+            threshold: thresholdNum,
+            decision,
+            reason_code,
+          })
+          .eq('id', existingEvaluationId)
+      }
+      return await supabaseServer.from('gate_evaluations').insert({
+        project_id: projectId,
+        scope_type: 'chunk' as const,
+        chunk_id: chunkId,
+        gate_type: 'identity' as const,
+        measured_value: measuredValue,
+        threshold: thresholdNum,
+        decision,
+        reason_code,
+      })
+    }
+
+    let finalDecision: ChunkIdentityGateDecision = primaryDecision
+    let finalReasonCode: string | null = primaryReasonCode
+
+    let res = await writeRow(primaryDecision, primaryReasonCode)
+    if (res.error && primaryDecision === 'rerender_required') {
       await safeAddRenderChunkGateJobEvent({
         job_id: jobId,
-        level: 'info',
-        step: 'render_chunk_quality_gate_already_recorded',
-        message: 'Chunk identity gate evaluation already recorded',
+        level: 'warn',
+        step: 'gate_decision_rerender_required_db_fallback',
+        message:
+          'Persisting rerender_required failed; retrying as blocked (likely DB CHECK on decision)',
         payload: {
           ...basePayload,
-          existing_evaluation_id: String(dup.data.id),
+          measured_value: measuredValue,
+          threshold: thresholdNum,
+          attempted_decision: primaryDecision,
+          error_message: res.error.message,
         },
       })
-      return
+      finalDecision = 'blocked'
+      finalReasonCode = 'IDENTITY_SCORE_BELOW_THRESHOLD'
+      res = await writeRow('blocked', 'IDENTITY_SCORE_BELOW_THRESHOLD')
     }
 
-    const insertRow = {
-      project_id: projectId,
-      scope_type: 'chunk' as const,
-      chunk_id: chunkId,
-      gate_type: 'identity' as const,
-      measured_value: measuredValue,
-      threshold: thresholdNum,
-      decision: 'passed' as const,
-      reason_code: reasonCodeRecorded,
+    if (res.error && primaryDecision === 'passed') {
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'gate_decision_passed_db_fallback',
+        message: 'Persisting passed failed; retrying as blocked',
+        payload: {
+          ...basePayload,
+          measured_value: measuredValue,
+          threshold: thresholdNum,
+          attempted_decision: primaryDecision,
+          error_message: res.error.message,
+        },
+      })
+      finalDecision = 'blocked'
+      finalReasonCode = 'GATE_DECISION_PASSED_PERSIST_FAILED'
+      res = await writeRow('blocked', 'GATE_DECISION_PASSED_PERSIST_FAILED')
     }
 
-    const ins = await supabaseServer.from('gate_evaluations').insert(insertRow)
-    if (ins.error) {
-      console.warn('recordRenderChunkQualityGateEvaluation insert failed', ins.error.message)
+    if (res.error) {
+      console.warn('recordRenderChunkQualityGateEvaluation persist failed', res.error.message)
       await safeAddRenderChunkGateJobEvent({
         job_id: jobId,
         level: 'warn',
         step: 'render_chunk_quality_gate_record_failed',
-        message: ins.error.message,
+        message: res.error.message,
         payload: {
           ...basePayload,
-          error_message: ins.error.message,
+          measured_value: measuredValue,
+          threshold: thresholdNum,
+          attempted_decision: primaryDecision,
+          final_attempted_decision: finalDecision,
+          error_message: res.error.message,
         },
       })
       return
@@ -1863,8 +1930,9 @@ async function recordRenderChunkQualityGateEvaluation(params: {
         ...basePayload,
         measured_value: measuredValue,
         threshold: thresholdNum,
-        decision: 'passed',
-        reason_code: reasonCodeRecorded,
+        decision: finalDecision,
+        reason_code: finalReasonCode,
+        evaluation_id: existingEvaluationId,
       },
     })
   } catch (e) {
@@ -1875,11 +1943,12 @@ async function recordRenderChunkQualityGateEvaluation(params: {
 async function evaluateAutoRerenderAfterRenderChunk(params: {
   jobId: string
   projectId: string
+  sequenceId: string
   chunkId: string
   normalizedScore: number | null
   identityAttemptCountRaw: unknown
 }): Promise<void> {
-  const { jobId, projectId, chunkId, normalizedScore, identityAttemptCountRaw } = params
+  const { jobId, projectId, sequenceId, chunkId, normalizedScore, identityAttemptCountRaw } = params
   const base = { project_id: projectId, chunk_id: chunkId }
 
   const parsedAttempt = parseIdentityAttemptCountForAutoRerender(identityAttemptCountRaw)
@@ -2077,9 +2146,47 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
         identity_score: identityScore,
         threshold: thresholdNum,
         reason_code: 'IDENTITY_SCORE_BELOW_THRESHOLD',
-        next_action: 'POST /api/projects/[id]/chunks/[chunkId]/rerender',
       },
     })
+
+    const enqueueResult = await enqueueRenderChunkRerenderJob({
+      supabase: supabaseServer,
+      jobQueue,
+      projectId,
+      chunkId,
+      sequenceId,
+      reason: 'auto_rerender',
+    })
+
+    if (!enqueueResult.ok) {
+      await safeAddAutoRerenderJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'auto_rerender_enqueue_failed',
+        message: `Auto rerender enqueue failed: ${enqueueResult.message}`,
+        payload: {
+          ...base,
+          code: enqueueResult.code,
+          identity_score: identityScore,
+          threshold: thresholdNum,
+          sequence_id: sequenceId,
+        },
+      })
+    } else {
+      await safeAddAutoRerenderJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'auto_rerender_enqueued',
+        message: 'Auto rerender: render_chunk job enqueued',
+        payload: {
+          ...base,
+          new_job_id: enqueueResult.jobId,
+          identity_score: identityScore,
+          threshold: thresholdNum,
+          sequence_id: sequenceId,
+        },
+      })
+    }
   } else {
     await safeAddAutoRerenderJobEvent({
       job_id: jobId,
@@ -2779,6 +2886,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
   await evaluateAutoRerenderAfterRenderChunk({
     jobId,
     projectId,
+    sequenceId: String(seqRow.data!.id),
     chunkId,
     normalizedScore,
     identityAttemptCountRaw: chunkRow.data.identity_attempt_count,

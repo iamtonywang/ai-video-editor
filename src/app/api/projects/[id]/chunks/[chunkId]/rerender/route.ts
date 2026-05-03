@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { jobQueue } from '@/lib/queue'
-import { getMvpJobCostPolicy } from '@/lib/costs/policy'
+import { enqueueRenderChunkRerenderJob } from '@/lib/server/enqueue-render-chunk-rerender'
 import { createAuthServerClient } from '@/lib/supabase/auth-server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 
@@ -122,237 +122,66 @@ export async function POST(_req: Request, context: RouteContext) {
       return NextResponse.json({ ok: false, error: 'RERENDER_STATUS_NOT_ALLOWED' }, { status: 400 })
     }
 
-    const { data: dupJob, error: dupError } = await supabaseAdmin
-      .from('jobs')
-      .select('id')
-      .eq('chunk_id', chunkId)
-      .eq('job_type', 'render_chunk')
-      .in('status', ['queued', 'running'])
-      .limit(1)
-      .maybeSingle()
-
-    if (dupError) {
-      return NextResponse.json({ ok: false, error: dupError.message }, { status: 500 })
-    }
-
-    if (dupJob?.id != null && String(dupJob.id).trim() !== '') {
-      return NextResponse.json({ ok: false, error: 'CHUNK_ALREADY_RUNNING' }, { status: 409 })
-    }
-
-    const previousRenderStatus = currentRenderStatus
-    const previousIdentityAttemptCount = parseAttemptCount(chunkRow.identity_attempt_count)
-    const nextIdentityAttemptCount = previousIdentityAttemptCount + 1
-
-    const { data: transitionRows, error: transitionError } = await supabaseAdmin
-      .from('sequence_chunks')
-      .update({
-        render_status: 'queued',
-        identity_attempt_count: nextIdentityAttemptCount,
-      })
-      .eq('id', chunkId)
-      .in('render_status', ['failed', 'rerender_pending'])
-      .select('id')
-
-    if (transitionError) {
-      return NextResponse.json({ ok: false, error: transitionError.message }, { status: 500 })
-    }
-
-    if (!transitionRows || transitionRows.length === 0) {
-      return NextResponse.json({ ok: false, error: 'RERENDER_STATE_CHANGED' }, { status: 409 })
-    }
-
-    const job_type = 'render_chunk'
-    const costSnapshot = getMvpJobCostPolicy(job_type)
-
-    const jobInsertPayload: Record<string, unknown> = {
-      project_id: projectId,
-      sequence_id: sequenceId,
-      chunk_id: chunkId,
-      job_type,
-      status: 'queued',
-      cost_estimate: costSnapshot.cost_estimate,
-      cost_accumulated: costSnapshot.cost_accumulated,
-      soft_cost_limit: costSnapshot.soft_cost_limit,
-      hard_cost_limit: costSnapshot.hard_cost_limit,
-      estimated_cost_preflight: costSnapshot.estimated_cost_preflight,
-      budget_precheck_status: costSnapshot.budget_precheck_status,
-      budget_precheck_reason: costSnapshot.budget_precheck_reason,
-      kill_signal: false,
-    }
-
-    const { data: jobRow, error: jobInsertError } = await supabaseAdmin
-      .from('jobs')
-      .insert(jobInsertPayload)
-      .select('id, project_id, sequence_id, chunk_id, job_type, status, created_at')
-      .single()
-
-    if (jobInsertError || !jobRow?.id) {
-      const rollback = await supabaseAdmin
-        .from('sequence_chunks')
-        .update({
-          render_status: previousRenderStatus,
-          identity_attempt_count: previousIdentityAttemptCount,
-        })
-        .eq('id', chunkId)
-      if (rollback.error) {
-        console.warn('POST rerender jobs insert rollback chunk failed', rollback.error.message)
-      }
-      return NextResponse.json(
-        { ok: false, error: 'JOB_CREATE_FAILED', error_detail: jobInsertError?.message ?? 'NO_DATA' },
-        { status: 500 }
-      )
-    }
-
-    const jobId = String(jobRow.id)
-
-    const { error: reqEventError } = await supabaseAdmin.from('job_events').insert({
-      job_id: jobId,
-      level: 'info',
-      step: 'rerender_requested',
-      message: 'Render chunk rerender requested',
-      payload: {
-        project_id: projectId,
-        sequence_id: sequenceId,
-        chunk_id: chunkId,
-        previous_render_status: previousRenderStatus,
-        current_render_status: 'queued',
-        previous_identity_attempt_count: previousIdentityAttemptCount,
-        identity_attempt_count: nextIdentityAttemptCount,
-        reason: 'manual_rerender',
-      },
+    const enqueueResult = await enqueueRenderChunkRerenderJob({
+      supabase: supabaseAdmin,
+      jobQueue,
+      projectId,
+      chunkId,
+      sequenceId,
+      reason: 'manual_rerender',
     })
-    if (reqEventError) {
-      console.warn('POST rerender rerender_requested job_events insert warning:', reqEventError.message)
-    }
 
-    const queuePayload = {
-      job_id: jobRow.id,
-      project_id: projectId,
-      chunk_id: chunkId,
-    }
-
-    try {
-      await jobQueue.add(
-        'job',
-        { job_type, payload: queuePayload },
-        { jobId: String(jobRow.id) }
-      )
-    } catch (enqueueErr) {
-      const errorDetail = enqueueErr instanceof Error ? enqueueErr.message : 'UNKNOWN_ERROR'
-      const now = new Date().toISOString()
-
-      try {
-        await supabaseAdmin
-          .from('jobs')
-          .update({
-            status: 'failed',
-            error_code: 'JOB_ENQUEUE_FAILED',
-            error_message: errorDetail,
-            finished_at: now,
-            updated_at: now,
-          })
-          .eq('id', jobRow.id)
-      } catch (e) {
-        console.warn('POST rerender enqueue failure jobs update exception:', e)
+    if (!enqueueResult.ok) {
+      if (enqueueResult.code === 'DUP_JOB_QUERY_FAILED') {
+        return NextResponse.json(
+          { ok: false, error: enqueueResult.code, error_detail: enqueueResult.message },
+          { status: 500 }
+        )
       }
-
-      try {
-        const fixChunk = await supabaseAdmin
-          .from('sequence_chunks')
-          .update({ render_status: 'failed' })
-          .eq('id', chunkId)
-        if (fixChunk.error) {
-          console.warn('POST rerender enqueue failure chunk fix warning:', fixChunk.error.message)
-        }
-      } catch (e) {
-        console.warn('POST rerender enqueue failure chunk fix exception:', e)
+      if (enqueueResult.code === 'CHUNK_ALREADY_RUNNING') {
+        return NextResponse.json({ ok: false, error: 'CHUNK_ALREADY_RUNNING' }, { status: 409 })
       }
-
-      try {
-        const { error: ce1 } = await supabaseAdmin.from('job_events').insert({
-          job_id: jobId,
-          level: 'error',
-          step: 'render_chunk_enqueue_failed',
-          message: 'Failed to enqueue render_chunk job',
-          payload: {
-            project_id: projectId,
-            sequence_id: sequenceId,
-            chunk_id: chunkId,
-            previous_render_status: previousRenderStatus,
-            attempted_render_status: 'queued',
-            previous_identity_attempt_count: previousIdentityAttemptCount,
-            attempted_identity_attempt_count: nextIdentityAttemptCount,
-            error: errorDetail,
-            job_type,
-            reason: 'manual_rerender',
-          },
-        })
-        if (ce1) {
-          console.warn('POST rerender render_chunk_enqueue_failed job_events warning:', ce1.message)
-        }
-      } catch (e) {
-        console.warn('POST rerender render_chunk_enqueue_failed job_events exception:', e)
+      if (enqueueResult.code === 'RERENDER_STATE_CHANGED') {
+        return NextResponse.json({ ok: false, error: 'RERENDER_STATE_CHANGED' }, { status: 409 })
       }
-
-      try {
-        const { error: ce2 } = await supabaseAdmin.from('job_events').insert({
-          job_id: jobId,
-          level: 'error',
-          step: 'enqueue_failed',
-          message: 'Failed to enqueue job',
-          payload: {
-            project_id: projectId,
-            sequence_id: sequenceId,
-            chunk_id: chunkId,
-            error: errorDetail,
-            job_type,
-            reason: 'manual_rerender',
-          },
-        })
-        if (ce2) {
-          console.warn('POST rerender enqueue_failed job_events warning:', ce2.message)
-        }
-      } catch (e) {
-        console.warn('POST rerender enqueue_failed job_events exception:', e)
+      if (enqueueResult.code === 'RERENDER_STATUS_NOT_ALLOWED') {
+        return NextResponse.json(
+          { ok: false, error: 'RERENDER_STATUS_NOT_ALLOWED', error_detail: enqueueResult.message },
+          { status: 400 }
+        )
       }
-
       return NextResponse.json(
         {
           ok: false,
-          error: 'JOB_ENQUEUE_FAILED',
-          error_detail: errorDetail,
+          error: enqueueResult.code,
+          error_detail: enqueueResult.message,
         },
         { status: 500 }
       )
     }
 
-    const { error: enqEventError } = await supabaseAdmin.from('job_events').insert({
-      job_id: jobId,
-      level: 'info',
-      step: 'rerender_enqueued',
-      message: 'Render chunk rerender enqueued',
-      payload: {
-        project_id: projectId,
-        sequence_id: sequenceId,
-        chunk_id: chunkId,
-        job_type,
-        reason: 'manual_rerender',
-      },
-    })
-    if (enqEventError) {
-      console.warn('POST rerender rerender_enqueued job_events insert warning:', enqEventError.message)
-    }
+    const { data: jobRow } = await supabaseAdmin
+      .from('jobs')
+      .select('id, project_id, sequence_id, chunk_id, status, created_at')
+      .eq('id', enqueueResult.jobId)
+      .maybeSingle()
+
+    const { data: chunkAfter } = await supabaseAdmin
+      .from('sequence_chunks')
+      .select('identity_attempt_count')
+      .eq('id', chunkId)
+      .maybeSingle()
 
     return NextResponse.json({
       ok: true,
       data: {
-        job_id: jobRow.id,
-        project_id: jobRow.project_id,
-        sequence_id: jobRow.sequence_id,
-        chunk_id: jobRow.chunk_id,
-        status: jobRow.status,
+        job_id: jobRow?.id ?? enqueueResult.jobId,
+        project_id: jobRow?.project_id ?? projectId,
+        sequence_id: jobRow?.sequence_id ?? sequenceId,
+        chunk_id: jobRow?.chunk_id ?? chunkId,
+        status: jobRow?.status ?? 'queued',
         render_status: 'queued',
-        identity_attempt_count: nextIdentityAttemptCount,
+        identity_attempt_count: parseAttemptCount(chunkAfter?.identity_attempt_count),
       },
       error: null,
     })
