@@ -5,6 +5,11 @@ import { jobQueue, QUEUE_NAMES } from '@/lib/queue'
 import { redisConnection } from '@/lib/queue/redis'
 import { enqueueRenderChunkRerenderJob } from '@/lib/server/enqueue-render-chunk-rerender'
 import { parseIdentityAttemptCount } from '@/lib/server/parse-identity-attempt-count'
+import {
+  expectedIdentityMemoryManifestKey,
+  isCanonicalIdentityMemoryManifestKey,
+  IDENTITY_MEMORY_MANIFEST_MAX_BYTES,
+} from '@/lib/server/identity/identity-memory-manifest-keys'
 import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
 import { supabaseServer } from '@/lib/supabase/server'
 
@@ -2185,23 +2190,6 @@ type StableIdentityObservationSummary = {
   }
 }
 
-const IDENTITY_MEMORY_MANIFEST_KEY_RE =
-  /^projects\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/identity\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/memory-manifest\.json$/
-
-function expectedIdentityMemoryManifestKey(projectId: string, identityProfileId: string): string {
-  const pid = String(projectId).trim()
-  const iid = String(identityProfileId).trim()
-  return `projects/${pid}/identity/${iid}/memory-manifest.json`
-}
-
-function isCanonicalIdentityMemoryManifestKey(
-  key: string,
-  projectId: string,
-  identityProfileId: string
-): boolean {
-  return key === expectedIdentityMemoryManifestKey(projectId, identityProfileId) && IDENTITY_MEMORY_MANIFEST_KEY_RE.test(key)
-}
-
 type StableIdentitySkipReasonKey =
   | 'key_mismatch'
   | 'download_failed'
@@ -2573,17 +2561,17 @@ async function persistIdentityMemoryManifest(params: {
     }
     const jsonBody = JSON.stringify(manifestBody)
     const byteSize = Buffer.byteLength(jsonBody, 'utf8')
-    if (byteSize > MAX_RENDER_CHUNK_STATE_JSON_BYTES) {
+    if (byteSize > IDENTITY_MEMORY_MANIFEST_MAX_BYTES) {
       await safeIdentityMemoryManifestJobEvent({
         job_id: jobId,
         level: 'warn',
         step: 'identity_memory_manifest_too_large',
-        message: `Identity memory manifest exceeds ${MAX_RENDER_CHUNK_STATE_JSON_BYTES} bytes`,
+        message: `Identity memory manifest exceeds ${IDENTITY_MEMORY_MANIFEST_MAX_BYTES} bytes`,
         payload: {
           manifest_key: manifestKey,
           latest_chunk_id: chunkId,
           byte_size: byteSize,
-          max_bytes: MAX_RENDER_CHUNK_STATE_JSON_BYTES,
+          max_bytes: IDENTITY_MEMORY_MANIFEST_MAX_BYTES,
         },
       })
       return
