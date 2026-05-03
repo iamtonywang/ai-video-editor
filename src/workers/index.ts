@@ -15,6 +15,9 @@ import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
 
+const ENABLE_STABLE_OBSERVE = process.env.ENABLE_STABLE_OBSERVE === 'true'
+const ENABLE_IDENTITY_MANIFEST = process.env.ENABLE_IDENTITY_MANIFEST === 'true'
+
 type AnalyzePayload = {
   job_id: string
   project_id: string
@@ -4827,51 +4830,56 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       : typeof rawChunkIndexStable === 'string'
         ? Number(rawChunkIndexStable)
         : NaN
-  const stableObservationSummary = await observeRenderChunkStableIdentity({
-    jobId,
-    projectId,
-    sceneId: String(chunkRow.data.scene_id),
-    currentChunkId: chunkId,
-    currentChunkIndex: currentChunkIndexForStable,
-    normalizedScore,
-  })
-
-  if (!stableObservationSummary) {
-    await safeIdentityMemoryManifestJobEvent({
-      job_id: jobId,
-      level: 'info',
-      step: 'identity_memory_manifest_skipped',
-      message: 'Identity memory manifest not written: stable observation unavailable',
-      payload: {
-        reason: 'stable_observation_unavailable',
-        latest_chunk_id: chunkId,
-      },
+  let stableObservationSummary: StableIdentityObservationSummary | null = null
+  if (ENABLE_STABLE_OBSERVE) {
+    stableObservationSummary = await observeRenderChunkStableIdentity({
+      jobId,
+      projectId,
+      sceneId: String(chunkRow.data.scene_id),
+      currentChunkId: chunkId,
+      currentChunkIndex: currentChunkIndexForStable,
+      normalizedScore,
     })
-  } else {
-    const profileRaw = renderInput.identity_profile_id
-    const profileIdStr =
-      typeof profileRaw === 'string' && profileRaw.trim() !== '' ? profileRaw.trim() : ''
-    if (!profileIdStr || !isValidUuid(profileIdStr)) {
+  }
+
+  if (ENABLE_STABLE_OBSERVE) {
+    if (!stableObservationSummary) {
       await safeIdentityMemoryManifestJobEvent({
         job_id: jobId,
         level: 'info',
         step: 'identity_memory_manifest_skipped',
-        message: 'Identity memory manifest not written: identity_profile_id missing or invalid',
+        message: 'Identity memory manifest not written: stable observation unavailable',
         payload: {
-          reason: 'identity_profile_missing_or_invalid',
+          reason: 'stable_observation_unavailable',
           latest_chunk_id: chunkId,
         },
       })
-    } else {
-      await persistIdentityMemoryManifest({
-        jobId,
-        projectId,
-        identityProfileId: profileIdStr,
-        sequenceId: String(seqRow.data!.id),
-        sceneId: String(chunkRow.data.scene_id),
-        chunkId,
-        summary: stableObservationSummary,
-      })
+    } else if (ENABLE_IDENTITY_MANIFEST) {
+      const profileRaw = renderInput.identity_profile_id
+      const profileIdStr =
+        typeof profileRaw === 'string' && profileRaw.trim() !== '' ? profileRaw.trim() : ''
+      if (profileIdStr && isValidUuid(profileIdStr)) {
+        await persistIdentityMemoryManifest({
+          jobId,
+          projectId,
+          identityProfileId: profileIdStr,
+          sequenceId: String(seqRow.data!.id),
+          sceneId: String(chunkRow.data.scene_id),
+          chunkId,
+          summary: stableObservationSummary,
+        })
+      } else {
+        await safeIdentityMemoryManifestJobEvent({
+          job_id: jobId,
+          level: 'info',
+          step: 'identity_memory_manifest_skipped',
+          message: 'Identity memory manifest not written: identity_profile_id missing or invalid',
+          payload: {
+            reason: 'identity_profile_missing_or_invalid',
+            latest_chunk_id: chunkId,
+          },
+        })
+      }
     }
   }
 
