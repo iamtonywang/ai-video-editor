@@ -36,7 +36,12 @@ export async function GET(_request: Request, context: RouteContext) {
       .maybeSingle()
 
     if (projectError) {
-      return NextResponse.json({ ok: false, error: projectError.message }, { status: 500 })
+      console.error('PROJECT_QUERY_FAILED', {
+        projectId,
+        userId: user.id,
+        error: projectError,
+      })
+      return NextResponse.json({ ok: false, error: 'PROJECT_QUERY_FAILED' }, { status: 500 })
     }
 
     if (!projectRow) {
