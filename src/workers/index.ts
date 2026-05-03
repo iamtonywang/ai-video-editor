@@ -2365,14 +2365,31 @@ async function safeAddRenderChunkIdentityScoreJobEvent(params: {
 
 type ChunkIdentityGateDecision = 'passed' | 'rerender_required' | 'blocked'
 
+function isStrictFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v)
+}
+
+function looksLikeDecisionCheckConstraintError(message: string): boolean {
+  const m = message.toLowerCase()
+  return (
+    m.includes('check') ||
+    m.includes('violates check') ||
+    m.includes('invalid input value for enum') ||
+    (m.includes('gate_evaluations') && m.includes('decision'))
+  )
+}
+
 async function recordRenderChunkQualityGateEvaluation(params: {
   jobId: string
   projectId: string
   chunkId: string
   identityScoreRaw: unknown
   measuredIdentityScoreOverride?: number | null
+  /** When set, included on render_chunk_identity_gate_decision job_events payload. */
+  scoreSource?: 'embedding' | 'pixel_fallback' | 'unavailable' | null
 }): Promise<void> {
-  const { jobId, projectId, chunkId, identityScoreRaw, measuredIdentityScoreOverride } = params
+  const { jobId, projectId, chunkId, identityScoreRaw, measuredIdentityScoreOverride, scoreSource } =
+    params
   const basePayload = {
     project_id: projectId,
     chunk_id: chunkId,
@@ -2380,10 +2397,103 @@ async function recordRenderChunkQualityGateEvaluation(params: {
     scope_type: 'chunk' as const,
   }
   try {
-    const measuredValue = resolveMeasuredIdentityScoreForGate({
+    const dupDecision = await supabaseServer
+      .from('job_events')
+      .select('id')
+      .eq('job_id', jobId)
+      .eq('step', 'render_chunk_identity_gate_decision')
+      .limit(1)
+      .maybeSingle()
+
+    if (!dupDecision.error && dupDecision.data?.id != null && String(dupDecision.data.id).trim() !== '') {
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'render_chunk_identity_gate_duplicate_skipped',
+        message: 'Chunk identity gate decision already recorded for this job',
+        payload: {
+          ...basePayload,
+          job_id: jobId,
+          chunk_id: chunkId,
+        },
+      })
+      return
+    }
+
+    const jobRowRes = await supabaseServer
+      .from('jobs')
+      .select('started_at, created_at, updated_at')
+      .eq('id', jobId)
+      .maybeSingle()
+
+    const latestGate = await supabaseServer
+      .from('gate_evaluations')
+      .select('id, created_at')
+      .eq('project_id', projectId)
+      .eq('chunk_id', chunkId)
+      .eq('gate_type', 'identity')
+      .eq('scope_type', 'chunk')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    if (latestGate.error) {
+      console.warn('recordRenderChunkQualityGateEvaluation latest gate read failed', latestGate.error.message)
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'render_chunk_quality_gate_record_failed',
+        message: 'Latest gate_evaluations row read failed',
+        payload: {
+          ...basePayload,
+          error_message: latestGate.error.message,
+        },
+      })
+      return
+    }
+
+    const jobStartedIso =
+      jobRowRes.data?.started_at != null && String(jobRowRes.data.started_at).trim() !== ''
+        ? String(jobRowRes.data.started_at)
+        : jobRowRes.data?.created_at != null && String(jobRowRes.data.created_at).trim() !== ''
+          ? String(jobRowRes.data.created_at)
+          : null
+
+    const latestCreated =
+      latestGate.data?.created_at != null ? String(latestGate.data.created_at) : null
+    const latestId =
+      latestGate.data?.id != null && String(latestGate.data.id).trim() !== ''
+        ? String(latestGate.data.id)
+        : null
+
+    if (
+      jobStartedIso &&
+      latestCreated &&
+      latestId &&
+      Date.parse(latestCreated) > Date.parse(jobStartedIso)
+    ) {
+      await safeAddRenderChunkGateJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'render_chunk_identity_gate_stale_update_skipped',
+        message: 'Skipping gate_evaluations insert: newer evaluation exists relative to job start',
+        payload: {
+          ...basePayload,
+          existing_gate_evaluation_id: latestId,
+          job_id: jobId,
+          reason: 'stale_job_result',
+          job_started_at: jobStartedIso,
+          existing_gate_created_at: latestCreated,
+        },
+      })
+      return
+    }
+
+    const measuredRaw = resolveMeasuredIdentityScoreForGate({
       measuredIdentityScoreOverride,
       identityScoreRaw,
     })
+    const measuredFinite = isStrictFiniteNumber(measuredRaw) ? measuredRaw : null
 
     const gateCfg = await supabaseServer
       .from('quality_gates')
@@ -2412,158 +2522,177 @@ async function recordRenderChunkQualityGateEvaluation(params: {
       return
     }
 
-    const thresholdNum = parseQualityGateThresholdForGate(gateCfg.data.threshold)
-    if (thresholdNum === null) {
+    const rawThreshold = gateCfg.data.threshold
+    const thresholdParsed = parseQualityGateThresholdForGate(rawThreshold)
+    const thresholdFinite = isStrictFiniteNumber(thresholdParsed) ? thresholdParsed : null
+
+    let decision: ChunkIdentityGateDecision
+    let reasonCode: string
+    let measuredForRow: number | null = measuredFinite
+    let thresholdForRow: number | null = thresholdFinite
+
+    if (measuredFinite === null) {
+      decision = 'blocked'
+      reasonCode = 'IDENTITY_SCORE_UNAVAILABLE'
+      measuredForRow = null
       await safeAddRenderChunkGateJobEvent({
         job_id: jobId,
         level: 'info',
-        step: 'render_chunk_quality_gate_skipped',
-        message: 'Chunk identity quality gate threshold invalid',
+        step: 'render_chunk_identity_gate_measured_invalid',
+        message: 'Measured identity score is not a finite number',
         payload: {
           ...basePayload,
-          reason_code: 'RENDER_CHUNK_IDENTITY_GATE_THRESHOLD_INVALID',
-          raw_threshold: gateCfg.data.threshold,
+          measured_raw: measuredRaw,
         },
       })
-      return
-    }
-
-    const latestRow = await supabaseServer
-      .from('gate_evaluations')
-      .select('id')
-      .eq('project_id', projectId)
-      .eq('chunk_id', chunkId)
-      .eq('gate_type', 'identity')
-      .eq('scope_type', 'chunk')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-
-    if (latestRow.error) {
-      console.warn(
-        'recordRenderChunkQualityGateEvaluation latest row read failed',
-        latestRow.error.message
-      )
+    } else if (thresholdFinite === null) {
+      decision = 'blocked'
+      reasonCode = 'IDENTITY_GATE_THRESHOLD_INVALID'
+      thresholdForRow = null
       await safeAddRenderChunkGateJobEvent({
         job_id: jobId,
-        level: 'warn',
-        step: 'render_chunk_quality_gate_record_failed',
-        message: 'Latest gate_evaluations row read failed',
+        level: 'info',
+        step: 'render_chunk_identity_gate_threshold_invalid',
+        message: 'quality_gates.threshold is not a finite number',
         payload: {
           ...basePayload,
-          error_message: latestRow.error.message,
+          raw_threshold: rawThreshold,
         },
       })
-      return
+    } else if (measuredFinite >= thresholdFinite) {
+      decision = 'passed'
+      reasonCode = 'IDENTITY_GATE_PASSED'
+    } else {
+      decision = 'rerender_required'
+      reasonCode = 'IDENTITY_SCORE_BELOW_THRESHOLD'
     }
 
-    const existingEvaluationId =
-      latestRow.data?.id != null && String(latestRow.data.id).trim() !== ''
-        ? String(latestRow.data.id)
-        : null
-
-    const primaryDecision: ChunkIdentityGateDecision =
-      measuredValue === null
-        ? 'blocked'
-        : measuredValue >= thresholdNum
-          ? 'passed'
-          : 'rerender_required'
-
-    const primaryReasonCode: string | null =
-      measuredValue === null
-        ? 'RENDER_CHUNK_IDENTITY_SCORE_NOT_MEASURED'
-        : primaryDecision === 'passed'
-          ? null
-          : 'IDENTITY_SCORE_BELOW_THRESHOLD'
-
-    const writeRow = async (
-      decision: ChunkIdentityGateDecision,
-      reason_code: string | null
-    ) => {
-      if (existingEvaluationId) {
-        return await supabaseServer
-          .from('gate_evaluations')
-          .update({
-            measured_value: measuredValue,
-            threshold: thresholdNum,
-            decision,
-            reason_code,
-          })
-          .eq('id', existingEvaluationId)
-      }
-      return await supabaseServer.from('gate_evaluations').insert({
+    const insertGate = async (
+      d: ChunkIdentityGateDecision,
+      rc: string
+    ): Promise<{ error: { message: string } | null }> => {
+      const ins = await supabaseServer.from('gate_evaluations').insert({
         project_id: projectId,
         scope_type: 'chunk' as const,
         chunk_id: chunkId,
         gate_type: 'identity' as const,
-        measured_value: measuredValue,
-        threshold: thresholdNum,
-        decision,
-        reason_code,
+        measured_value: measuredForRow,
+        threshold: thresholdForRow,
+        decision: d,
+        reason_code: rc,
       })
+      return { error: ins.error }
     }
 
-    let finalDecision: ChunkIdentityGateDecision = primaryDecision
-    let finalReasonCode: string | null = primaryReasonCode
+    const tryPersistWithFallback = async (
+      primary: ChunkIdentityGateDecision,
+      rc: string
+    ): Promise<{ ok: true; finalDecision: ChunkIdentityGateDecision; finalReason: string } | { ok: false; message: string }> => {
+      let res = await insertGate(primary, rc)
+      if (!res.error) {
+        return { ok: true, finalDecision: primary, finalReason: rc }
+      }
+      const errMsg = res.error.message
+      if (
+        primary === 'rerender_required' &&
+        looksLikeDecisionCheckConstraintError(errMsg)
+      ) {
+        await safeAddRenderChunkGateJobEvent({
+          job_id: jobId,
+          level: 'warn',
+          step: 'render_chunk_identity_gate_decision_fallback',
+          message: errMsg,
+          payload: {
+            ...basePayload,
+            original_decision: 'rerender_required',
+            fallback_decision: 'blocked',
+            original_reason_code: 'IDENTITY_SCORE_BELOW_THRESHOLD',
+            fallback_reason_code: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED',
+            error_message: errMsg,
+          },
+        })
+        res = await insertGate('blocked', 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED')
+        if (!res.error) {
+          return { ok: true, finalDecision: 'blocked', finalReason: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED' }
+        }
+        return { ok: false, message: res.error.message }
+      }
 
-    let res = await writeRow(primaryDecision, primaryReasonCode)
-    if (res.error && primaryDecision === 'rerender_required') {
-      await safeAddRenderChunkGateJobEvent({
-        job_id: jobId,
-        level: 'warn',
-        step: 'gate_decision_rerender_required_db_fallback',
-        message:
-          'Persisting rerender_required failed; retrying as blocked (likely DB CHECK on decision)',
-        payload: {
-          ...basePayload,
-          measured_value: measuredValue,
-          threshold: thresholdNum,
-          attempted_decision: primaryDecision,
-          error_message: res.error.message,
-        },
-      })
-      finalDecision = 'blocked'
-      finalReasonCode = 'IDENTITY_SCORE_BELOW_THRESHOLD'
-      res = await writeRow('blocked', 'IDENTITY_SCORE_BELOW_THRESHOLD')
+      if (primary === 'passed' && looksLikeDecisionCheckConstraintError(errMsg)) {
+        await safeAddRenderChunkGateJobEvent({
+          job_id: jobId,
+          level: 'warn',
+          step: 'render_chunk_identity_gate_decision_fallback',
+          message: errMsg,
+          payload: {
+            ...basePayload,
+            original_decision: 'passed',
+            fallback_decision: 'blocked',
+            original_reason_code: 'IDENTITY_GATE_PASSED',
+            fallback_reason_code: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED',
+            error_message: errMsg,
+          },
+        })
+        res = await insertGate('blocked', 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED')
+        if (!res.error) {
+          return { ok: true, finalDecision: 'blocked', finalReason: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED' }
+        }
+        return { ok: false, message: res.error.message }
+      }
+
+      return { ok: false, message: errMsg }
     }
 
-    if (res.error && primaryDecision === 'passed') {
-      await safeAddRenderChunkGateJobEvent({
-        job_id: jobId,
-        level: 'warn',
-        step: 'gate_decision_passed_db_fallback',
-        message: 'Persisting passed failed; retrying as blocked',
-        payload: {
-          ...basePayload,
-          measured_value: measuredValue,
-          threshold: thresholdNum,
-          attempted_decision: primaryDecision,
-          error_message: res.error.message,
-        },
-      })
-      finalDecision = 'blocked'
-      finalReasonCode = 'GATE_DECISION_PASSED_PERSIST_FAILED'
-      res = await writeRow('blocked', 'GATE_DECISION_PASSED_PERSIST_FAILED')
-    }
-
-    if (res.error) {
-      console.warn('recordRenderChunkQualityGateEvaluation persist failed', res.error.message)
+    const persisted = await tryPersistWithFallback(decision, reasonCode)
+    if (!persisted.ok) {
+      console.warn('recordRenderChunkQualityGateEvaluation insert failed', persisted.message)
       await safeAddRenderChunkGateJobEvent({
         job_id: jobId,
         level: 'warn',
         step: 'render_chunk_quality_gate_record_failed',
-        message: res.error.message,
+        message: persisted.message,
         payload: {
           ...basePayload,
-          measured_value: measuredValue,
-          threshold: thresholdNum,
-          attempted_decision: primaryDecision,
-          final_attempted_decision: finalDecision,
-          error_message: res.error.message,
+          measured_value: measuredForRow,
+          threshold: thresholdForRow,
+          attempted_decision: decision,
+          error_message: persisted.message,
         },
       })
       return
     }
+
+    const decisionPayload: Record<string, unknown> = {
+      ...basePayload,
+      measured_value: measuredForRow,
+      threshold: thresholdForRow,
+      decision: persisted.finalDecision,
+      reason_code: persisted.finalReason,
+    }
+    if (scoreSource != null && scoreSource !== undefined) {
+      decisionPayload.score_source = scoreSource
+    }
+
+    await safeAddRenderChunkGateJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_chunk_identity_gate_decision',
+      message: 'Chunk identity gate decision computed',
+      payload: decisionPayload,
+    })
+
+    await safeAddRenderChunkGateJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_chunk_identity_gate_latest_recorded',
+      message: 'gate_evaluations row inserted (no repo-local unique DDL; duplicate rows possible over time)',
+      payload: {
+        ...basePayload,
+        duplicate_possible: true,
+        decision: persisted.finalDecision,
+        reason_code: persisted.finalReason,
+      },
+    })
 
     await safeAddRenderChunkGateJobEvent({
       job_id: jobId,
@@ -2572,11 +2701,10 @@ async function recordRenderChunkQualityGateEvaluation(params: {
       message: 'Chunk identity quality gate evaluation recorded',
       payload: {
         ...basePayload,
-        measured_value: measuredValue,
-        threshold: thresholdNum,
-        decision: finalDecision,
-        reason_code: finalReasonCode,
-        evaluation_id: existingEvaluationId,
+        measured_value: measuredForRow,
+        threshold: thresholdForRow,
+        decision: persisted.finalDecision,
+        reason_code: persisted.finalReason,
       },
     })
   } catch (e) {
@@ -3598,12 +3726,20 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     }
   }
 
+  const identityScoreSourceForGate: 'embedding' | 'pixel_fallback' | 'unavailable' =
+    embeddingScoreResult.ok
+      ? 'embedding'
+      : normalizedScore !== null
+        ? 'pixel_fallback'
+        : 'unavailable'
+
   await recordRenderChunkQualityGateEvaluation({
     jobId,
     projectId,
     chunkId,
     identityScoreRaw: chunkRow.data.identity_score,
     measuredIdentityScoreOverride,
+    scoreSource: identityScoreSourceForGate,
   })
   await evaluateAutoRerenderAfterRenderChunk({
     jobId,
