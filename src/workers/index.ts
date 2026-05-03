@@ -1086,6 +1086,7 @@ function escapeXml(text: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
 }
 
 const PREVIEW_TEXT_MAX = 800
@@ -1579,17 +1580,48 @@ async function handlePreviewJob(payload: PreviewPayload) {
   })
 }
 
+const DUMMY_CHUNK_INSTRUCTION_PREVIEW_MAX = 80
+const DUMMY_CHUNK_INSTRUCTION_ELLIPSIS = '...'
+const DUMMY_CHUNK_INSTRUCTION_PREVIEW_HEAD =
+  DUMMY_CHUNK_INSTRUCTION_PREVIEW_MAX - DUMMY_CHUNK_INSTRUCTION_ELLIPSIS.length
+
+/** Dummy WebP용: trim, 비문자열·빈 문자열 → null, 공백류는 단일 공백으로 압축. */
+function normalizeInstructionForDummyChunkRender(raw: string | null | undefined): string | null {
+  if (raw == null || typeof raw !== 'string') return null
+  const t = raw.trim().replace(/\s+/g, ' ').trim()
+  return t === '' ? null : t
+}
+
+function buildDummyChunkInstructionPreview(normalized: string): string {
+  if (normalized.length <= DUMMY_CHUNK_INSTRUCTION_PREVIEW_MAX) return normalized
+  return (
+    normalized.slice(0, DUMMY_CHUNK_INSTRUCTION_PREVIEW_HEAD) + DUMMY_CHUNK_INSTRUCTION_ELLIPSIS
+  )
+}
+
 async function renderChunkDummyWebp(params: {
   projectId: string
   chunkId: string
+  instruction?: string | null
 }): Promise<Buffer> {
   const { projectId, chunkId } = params
+  const normalized = normalizeInstructionForDummyChunkRender(params.instruction)
+  const instruction_preview =
+    normalized == null ? null : buildDummyChunkInstructionPreview(normalized)
+
+  const instructionPreviewSvg =
+    instruction_preview != null
+      ? `
+  <!-- Provider 연결 전 instruction 전달 확인용: 원문 전체가 아닌 instruction_preview(최대 ${DUMMY_CHUNK_INSTRUCTION_PREVIEW_MAX}자)만 표시 -->
+  <text x="48" y="192" font-family="system-ui, Segoe UI, sans-serif" font-size="15" fill="#cbd5e1">instruction_preview: ${escapeXml(instruction_preview)}</text>`
+      : ''
+
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg width="960" height="540" xmlns="http://www.w3.org/2000/svg">
   <rect width="100%" height="100%" fill="#0b1220"/>
   <text x="48" y="76" font-family="system-ui, Segoe UI, sans-serif" font-size="28" font-weight="700" fill="#f9fafb">Dummy render_chunk</text>
   <text x="48" y="128" font-family="system-ui, Segoe UI, sans-serif" font-size="16" fill="#e5e7eb">project: ${escapeXml(projectId)}</text>
-  <text x="48" y="160" font-family="system-ui, Segoe UI, sans-serif" font-size="16" fill="#e5e7eb">chunk: ${escapeXml(chunkId)}</text>
+  <text x="48" y="160" font-family="system-ui, Segoe UI, sans-serif" font-size="16" fill="#e5e7eb">chunk: ${escapeXml(chunkId)}</text>${instructionPreviewSvg}
   <text x="48" y="510" font-family="system-ui, Segoe UI, sans-serif" font-size="14" fill="rgba(255,255,255,0.75)">GPU not connected • deterministic placeholder</text>
 </svg>`
   return sharp(Buffer.from(svg, 'utf8')).webp({ quality: 82 }).toBuffer()
@@ -4563,7 +4595,14 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
   const outputPath = `projects/${projectId}/chunks/${chunkId}/render.webp`
   let webpBuffer: Buffer
   try {
-    webpBuffer = await renderChunkDummyWebp({ projectId, chunkId })
+    webpBuffer = await renderChunkDummyWebp({
+      projectId,
+      chunkId,
+      instruction:
+        typeof renderInput.instruction === 'string' || renderInput.instruction === null
+          ? (renderInput.instruction as string | null)
+          : null,
+    })
   } catch (err) {
     const msg = getErrorMessage(err)
     await supabaseServer.from('sequence_chunks').update({ render_status: 'failed' }).eq('id', chunkId)
