@@ -2610,6 +2610,25 @@ async function safeAddRenderChunkIdentityScoreJobEvent(params: {
 
 type ChunkIdentityGateDecision = 'passed' | 'rerender_required' | 'blocked'
 
+/** Observability-only summary for auto rerender job_events; does not drive decisions. */
+type RenderChunkGateRecordSummary = {
+  persisted: boolean
+  decision: ChunkIdentityGateDecision | null
+  reason_code: string | null
+  fallback_used: boolean
+  fallback_from: string | null
+  fallback_to: string | null
+}
+
+const EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY: RenderChunkGateRecordSummary = {
+  persisted: false,
+  decision: null,
+  reason_code: null,
+  fallback_used: false,
+  fallback_from: null,
+  fallback_to: null,
+}
+
 function isStrictFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v)
 }
@@ -2632,7 +2651,7 @@ async function recordRenderChunkQualityGateEvaluation(params: {
   measuredIdentityScoreOverride?: number | null
   /** When set, included on render_chunk_identity_gate_decision job_events payload. */
   scoreSource?: 'embedding' | 'pixel_fallback' | 'unavailable' | null
-}): Promise<void> {
+}): Promise<RenderChunkGateRecordSummary> {
   const { jobId, projectId, chunkId, identityScoreRaw, measuredIdentityScoreOverride, scoreSource } =
     params
   const basePayload = {
@@ -2662,7 +2681,7 @@ async function recordRenderChunkQualityGateEvaluation(params: {
           chunk_id: chunkId,
         },
       })
-      return
+      return { ...EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY }
     }
 
     const jobRowRes = await supabaseServer
@@ -2694,7 +2713,7 @@ async function recordRenderChunkQualityGateEvaluation(params: {
           error_message: latestGate.error.message,
         },
       })
-      return
+      return { ...EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY }
     }
 
     const jobStartedIso =
@@ -2731,7 +2750,7 @@ async function recordRenderChunkQualityGateEvaluation(params: {
           existing_gate_created_at: latestCreated,
         },
       })
-      return
+      return { ...EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY }
     }
 
     const measuredRaw = resolveMeasuredIdentityScoreForGate({
@@ -2764,7 +2783,7 @@ async function recordRenderChunkQualityGateEvaluation(params: {
           ...(gateCfg.error ? { error_message: gateCfg.error.message } : {}),
         },
       })
-      return
+      return { ...EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY }
     }
 
     const rawThreshold = gateCfg.data.threshold
@@ -2854,6 +2873,12 @@ async function recordRenderChunkQualityGateEvaluation(params: {
             original_reason_code: 'IDENTITY_SCORE_BELOW_THRESHOLD',
             fallback_reason_code: 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED',
             error_message: errMsg,
+            persisted_gate_decision_may_differ: true,
+            gate_decision_source: 'score_threshold_runtime',
+            rerender_execution_basis: 'runtime_score_threshold',
+            gate_fallback_used: true,
+            gate_fallback_from: 'rerender_required',
+            gate_fallback_to: 'blocked',
           },
         })
         res = await insertGate('blocked', 'IDENTITY_GATE_DECISION_FALLBACK_BLOCKED')
@@ -2900,7 +2925,7 @@ async function recordRenderChunkQualityGateEvaluation(params: {
           },
         })
       }
-      return
+      return { ...EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY }
     }
 
     const decisionPayload: Record<string, unknown> = {
@@ -2948,9 +2973,56 @@ async function recordRenderChunkQualityGateEvaluation(params: {
         reason_code: persisted.finalReason,
       },
     })
+
+    const fallbackUsed =
+      decision === 'rerender_required' && persisted.finalDecision === 'blocked'
+
+    return {
+      persisted: true,
+      decision: persisted.finalDecision,
+      reason_code: persisted.finalReason,
+      fallback_used: fallbackUsed,
+      fallback_from: fallbackUsed ? 'rerender_required' : null,
+      fallback_to: fallbackUsed ? 'blocked' : null,
+    }
   } catch (e) {
     console.warn('recordRenderChunkQualityGateEvaluation unexpected', getErrorMessage(e))
+    return { ...EMPTY_RENDER_CHUNK_GATE_RECORD_SUMMARY }
   }
+}
+
+function buildAutoRerenderGateObservabilityPayload(params: {
+  gateRecordSummary: RenderChunkGateRecordSummary | null | undefined
+  normalizedScore: number | null
+  threshold: number | null
+  scoreSource?: 'embedding' | 'pixel_fallback' | 'unavailable' | null
+}): Record<string, unknown> {
+  const s = params.gateRecordSummary
+  const gate_evaluation_persisted = Boolean(s?.persisted)
+  const persisted_gate_decision: ChunkIdentityGateDecision | null =
+    s != null && s.persisted && s.decision != null ? s.decision : null
+  const gate_fallback_used = Boolean(s?.fallback_used)
+  const gate_fallback_from = s?.fallback_from ?? null
+  const gate_fallback_to = s?.fallback_to ?? null
+  const persisted_gate_decision_may_differ =
+    !gate_evaluation_persisted || gate_fallback_used
+
+  const out: Record<string, unknown> = {
+    normalized_score: params.normalizedScore,
+    threshold: params.threshold,
+    gate_decision_source: 'score_threshold_runtime',
+    rerender_execution_basis: 'runtime_score_threshold',
+    persisted_gate_decision,
+    gate_evaluation_persisted,
+    persisted_gate_decision_may_differ,
+    gate_fallback_used,
+    gate_fallback_from,
+    gate_fallback_to,
+  }
+  if (params.scoreSource != null && params.scoreSource !== undefined) {
+    out.score_source = params.scoreSource
+  }
+  return out
 }
 
 async function evaluateAutoRerenderAfterRenderChunk(params: {
@@ -2960,9 +3032,28 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
   chunkId: string
   normalizedScore: number | null
   identityAttemptCountRaw: unknown
+  gateRecordSummary?: RenderChunkGateRecordSummary | null
+  scoreSource?: 'embedding' | 'pixel_fallback' | 'unavailable' | null
 }): Promise<void> {
-  const { jobId, projectId, sequenceId, chunkId, normalizedScore, identityAttemptCountRaw } = params
+  const {
+    jobId,
+    projectId,
+    sequenceId,
+    chunkId,
+    normalizedScore,
+    identityAttemptCountRaw,
+    gateRecordSummary,
+    scoreSource,
+  } = params
   const base = { project_id: projectId, chunk_id: chunkId }
+
+  const gateObs = (threshold: number | null) =>
+    buildAutoRerenderGateObservabilityPayload({
+      gateRecordSummary,
+      normalizedScore,
+      threshold,
+      scoreSource,
+    })
 
   const currentAttempt = parseIdentityAttemptCount(identityAttemptCountRaw)
 
@@ -2977,6 +3068,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender skipped: identity score not available',
       payload: {
         ...base,
+        ...gateObs(null),
         reason_code: 'AUTO_RERENDER_IDENTITY_SCORE_NOT_AVAILABLE',
       },
     })
@@ -3002,6 +3094,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender skipped: quality gate threshold not available',
       payload: {
         ...base,
+        ...gateObs(null),
         identity_score: identityScore,
         raw_threshold: rawThreshold ?? null,
         reason_code: 'AUTO_RERENDER_THRESHOLD_NOT_AVAILABLE',
@@ -3019,6 +3112,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender skipped: quality gate threshold invalid',
       payload: {
         ...base,
+        ...gateObs(null),
         identity_score: identityScore,
         raw_threshold: rawThreshold ?? null,
         reason_code: 'AUTO_RERENDER_THRESHOLD_NOT_AVAILABLE',
@@ -3035,6 +3129,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender not required: identity score meets threshold',
       payload: {
         ...base,
+        ...gateObs(thresholdNum),
         identity_score: identityScore,
         threshold: thresholdNum,
         currentAttempt,
@@ -3064,6 +3159,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender candidate skipped: render_chunk job already queued or running',
       payload: {
         ...base,
+        ...gateObs(thresholdNum),
         existing_job_id: String(dupJobs.data.id),
         identity_score: identityScore,
         threshold: thresholdNum,
@@ -3094,6 +3190,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
         message: 'Auto rerender max attempt reached; chunk marked failed',
         payload: {
           ...base,
+          ...gateObs(thresholdNum),
           currentAttempt,
           maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
           identity_score: identityScore,
@@ -3109,6 +3206,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
         message: 'Auto rerender failed status update skipped: chunk state changed',
         payload: {
           ...base,
+          ...gateObs(thresholdNum),
           currentAttempt,
           maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
           identity_score: identityScore,
@@ -3142,6 +3240,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender required: chunk marked rerender_pending',
       payload: {
         ...base,
+        ...gateObs(thresholdNum),
         currentAttempt,
         maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
         identity_score: identityScore,
@@ -3168,6 +3267,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
         message: `Auto rerender enqueue failed: ${enqueueErrMsg}`,
         payload: {
           ...base,
+          ...gateObs(thresholdNum),
           code: enqueueResult.code,
           identity_score: identityScore,
           threshold: thresholdNum,
@@ -3190,6 +3290,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
           message: recoveryUpd.error.message,
           payload: {
             ...base,
+            ...gateObs(thresholdNum),
             enqueue_error: enqueueErrMsg,
             recovery_error: recoveryUpd.error.message,
           },
@@ -3202,6 +3303,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
           message: 'Enqueue recovery skipped: chunk is not rerender_pending',
           payload: {
             ...base,
+            ...gateObs(thresholdNum),
             reason: 'chunk_not_rerender_pending',
             enqueue_error: enqueueErrMsg,
           },
@@ -3214,6 +3316,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
           message: 'Rerender enqueue failed; chunk render_status restored to rendered',
           payload: {
             ...base,
+            ...gateObs(thresholdNum),
             from_status: 'rerender_pending',
             to_status: 'rendered',
             reason: 'enqueue_failed',
@@ -3229,6 +3332,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
         message: 'Auto rerender: render_chunk job enqueued',
         payload: {
           ...base,
+          ...gateObs(thresholdNum),
           new_job_id: enqueueResult.jobId,
           identity_score: identityScore,
           threshold: thresholdNum,
@@ -3244,6 +3348,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
       message: 'Auto rerender rerender_pending update skipped: chunk state changed',
       payload: {
         ...base,
+        ...gateObs(thresholdNum),
         currentAttempt,
         maxAttempt: AUTO_RERENDER_MAX_ATTEMPT,
         identity_score: identityScore,
@@ -4152,7 +4257,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     normalizedScore,
   })
 
-  await recordRenderChunkQualityGateEvaluation({
+  const gateRecordSummary = await recordRenderChunkQualityGateEvaluation({
     jobId,
     projectId,
     chunkId,
@@ -4167,6 +4272,8 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     chunkId,
     normalizedScore,
     identityAttemptCountRaw: chunkRow.data.identity_attempt_count,
+    gateRecordSummary,
+    scoreSource: identityScoreSourceForGate,
   })
   await addJobEvent({
     job_id: jobId,
