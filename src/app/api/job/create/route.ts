@@ -245,6 +245,20 @@ export async function POST(req: NextRequest) {
           { status: 403 }
         )
       }
+
+      const ctxChunkId = String(renderChunkContext.chunk_id ?? '').trim()
+      const ctxSeqId = String(renderChunkContext.sequence_id ?? '').trim()
+      if (!ctxChunkId || !ctxSeqId || !isValidUuid(ctxChunkId) || !isValidUuid(ctxSeqId)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'RENDER_CHUNK_JOB_MISSING_CONTEXT_IDS',
+            message:
+              'chunk_id and sequence_id are required as valid UUIDs for render_chunk jobs',
+          },
+          { status: 400 }
+        )
+      }
     }
 
     const { data: dupRow, error: dupError } = await supabaseAdmin
@@ -361,6 +375,17 @@ export async function POST(req: NextRequest) {
 
     const costSnapshot = getMvpJobCostPolicy(job_type)
 
+    if (job_type === 'render_chunk' && renderChunkContext === null) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'RENDER_CHUNK_JOB_MISSING_CONTEXT_IDS',
+          message: 'render_chunk job requires renderChunkContext',
+        },
+        { status: 400 }
+      )
+    }
+
     let previousChunkRenderStatus: string | null = null
     if (job_type === 'render_chunk' && renderChunkContext) {
       previousChunkRenderStatus = renderChunkContext.render_status ?? null
@@ -375,21 +400,32 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const jobInsertCore = {
+      project_id,
+      job_type,
+      status: 'queued' as const,
+      cost_estimate: costSnapshot.cost_estimate,
+      cost_accumulated: costSnapshot.cost_accumulated,
+      soft_cost_limit: costSnapshot.soft_cost_limit,
+      hard_cost_limit: costSnapshot.hard_cost_limit,
+      estimated_cost_preflight: costSnapshot.estimated_cost_preflight,
+      budget_precheck_status: costSnapshot.budget_precheck_status,
+      budget_precheck_reason: costSnapshot.budget_precheck_reason,
+      kill_signal: false,
+    }
+
+    const jobInsertPayload =
+      job_type === 'render_chunk' && renderChunkContext != null
+        ? {
+            ...jobInsertCore,
+            chunk_id: renderChunkContext.chunk_id,
+            sequence_id: renderChunkContext.sequence_id,
+          }
+        : jobInsertCore
+
     const { data, error } = await supabaseAdmin
       .from('jobs')
-      .insert({
-        project_id,
-        job_type,
-        status: 'queued',
-        cost_estimate: costSnapshot.cost_estimate,
-        cost_accumulated: costSnapshot.cost_accumulated,
-        soft_cost_limit: costSnapshot.soft_cost_limit,
-        hard_cost_limit: costSnapshot.hard_cost_limit,
-        estimated_cost_preflight: costSnapshot.estimated_cost_preflight,
-        budget_precheck_status: costSnapshot.budget_precheck_status,
-        budget_precheck_reason: costSnapshot.budget_precheck_reason,
-        kill_signal: false,
-      })
+      .insert(jobInsertPayload)
       .select('id, project_id, job_type, status, created_at')
       .single()
 
@@ -436,6 +472,33 @@ export async function POST(req: NextRequest) {
         { ok: false, error: 'JOB_CREATE_NO_DATA', ...rollbackFields },
         { status: 500 }
       )
+    }
+
+    if (job_type === 'render_chunk' && renderChunkContext != null) {
+      try {
+        const { error: createdEvError } = await supabaseAdmin.from('job_events').insert({
+          job_id: data.id,
+          level: 'info',
+          step: 'render_chunk_job_created_with_chunk_sequence',
+          message: 'render_chunk job created with chunk and sequence',
+          payload: {
+            job_id: data.id,
+            chunk_id: renderChunkContext.chunk_id,
+            sequence_id: renderChunkContext.sequence_id,
+          },
+        })
+        if (createdEvError) {
+          console.warn(
+            'POST /api/job/create render_chunk_job_created_with_chunk_sequence job_events warning:',
+            createdEvError.message
+          )
+        }
+      } catch (createdEvException) {
+        console.warn(
+          'POST /api/job/create render_chunk_job_created_with_chunk_sequence job_events exception:',
+          createdEvException
+        )
+      }
     }
 
     try {
