@@ -18,6 +18,58 @@ function isValidUuid(v: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)
 }
 
+type RenderChunkQueuedRollbackResult = {
+  rollback_success: boolean
+  rollback_to_status: string | null
+  rollback_error: string | null
+}
+
+/**
+ * After jobs insert fails, restore chunk from `queued` to the status observed
+ * before this route set it to queued (single guarded update).
+ */
+async function rollbackRenderChunkQueuedToPreviousStatus(params: {
+  chunkId: string
+  previousRenderStatus: string | null
+}): Promise<RenderChunkQueuedRollbackResult> {
+  const prev = params.previousRenderStatus
+  if (prev == null || String(prev).trim() === '') {
+    return {
+      rollback_success: false,
+      rollback_to_status: null,
+      rollback_error: 'NO_PREVIOUS_STATUS',
+    }
+  }
+  const toStatus = String(prev).trim()
+  const rb = await supabaseAdmin
+    .from('sequence_chunks')
+    .update({ render_status: toStatus })
+    .eq('id', params.chunkId)
+    .eq('render_status', 'queued')
+    .select('id')
+
+  if (rb.error) {
+    return {
+      rollback_success: false,
+      rollback_to_status: null,
+      rollback_error: rb.error.message,
+    }
+  }
+  const rows = rb.data
+  if (!Array.isArray(rows) || rows.length === 0) {
+    return {
+      rollback_success: false,
+      rollback_to_status: null,
+      rollback_error: 'ROLLBACK_NO_MATCHING_CHUNK_QUEUED',
+    }
+  }
+  return {
+    rollback_success: true,
+    rollback_to_status: toStatus,
+    rollback_error: null,
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const supabase = await createAuthServerClient()
@@ -342,25 +394,46 @@ export async function POST(req: NextRequest) {
       .single()
 
     if (error) {
+      const rollbackFields: Record<string, unknown> = {}
+      if (job_type === 'render_chunk' && renderChunkContext) {
+        const rb = await rollbackRenderChunkQueuedToPreviousStatus({
+          chunkId: renderChunkContext.chunk_id,
+          previousRenderStatus: previousChunkRenderStatus,
+        })
+        rollbackFields.rollback_success = rb.rollback_success
+        rollbackFields.rollback_to_status = rb.rollback_to_status
+        rollbackFields.rollback_error = rb.rollback_error
+      }
+
       if (
         error.message.includes('foreign key') ||
         error.message.includes('violates foreign key constraint')
       ) {
         return NextResponse.json(
-          { ok: false, error: 'INVALID_PROJECT_ID' },
+          { ok: false, error: 'INVALID_PROJECT_ID', ...rollbackFields },
           { status: 400 }
         )
       }
 
       return NextResponse.json(
-        { ok: false, error: error.message },
+        { ok: false, error: error.message, ...rollbackFields },
         { status: 500 }
       )
     }
 
     if (!data) {
+      const rollbackFields: Record<string, unknown> = {}
+      if (job_type === 'render_chunk' && renderChunkContext) {
+        const rb = await rollbackRenderChunkQueuedToPreviousStatus({
+          chunkId: renderChunkContext.chunk_id,
+          previousRenderStatus: previousChunkRenderStatus,
+        })
+        rollbackFields.rollback_success = rb.rollback_success
+        rollbackFields.rollback_to_status = rb.rollback_to_status
+        rollbackFields.rollback_error = rb.rollback_error
+      }
       return NextResponse.json(
-        { ok: false, error: 'JOB_CREATE_NO_DATA' },
+        { ok: false, error: 'JOB_CREATE_NO_DATA', ...rollbackFields },
         { status: 500 }
       )
     }

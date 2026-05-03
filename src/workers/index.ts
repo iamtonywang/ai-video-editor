@@ -2927,11 +2927,12 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
     })
 
     if (!enqueueResult.ok) {
+      const enqueueErrMsg = enqueueResult.message
       await safeAddAutoRerenderJobEvent({
         job_id: jobId,
         level: 'warn',
         step: 'auto_rerender_enqueue_failed',
-        message: `Auto rerender enqueue failed: ${enqueueResult.message}`,
+        message: `Auto rerender enqueue failed: ${enqueueErrMsg}`,
         payload: {
           ...base,
           code: enqueueResult.code,
@@ -2940,6 +2941,53 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
           sequence_id: sequenceId,
         },
       })
+
+      const recoveryUpd = await supabaseServer
+        .from('sequence_chunks')
+        .update({ render_status: 'rendered' })
+        .eq('id', chunkId)
+        .eq('render_status', 'rerender_pending')
+        .select('id')
+
+      if (recoveryUpd.error) {
+        await safeAddAutoRerenderJobEvent({
+          job_id: jobId,
+          level: 'warn',
+          step: 'auto_rerender_enqueue_recovery_failed',
+          message: recoveryUpd.error.message,
+          payload: {
+            ...base,
+            enqueue_error: enqueueErrMsg,
+            recovery_error: recoveryUpd.error.message,
+          },
+        })
+      } else if (!Array.isArray(recoveryUpd.data) || recoveryUpd.data.length === 0) {
+        await safeAddAutoRerenderJobEvent({
+          job_id: jobId,
+          level: 'info',
+          step: 'auto_rerender_enqueue_recovery_skipped',
+          message: 'Enqueue recovery skipped: chunk is not rerender_pending',
+          payload: {
+            ...base,
+            reason: 'chunk_not_rerender_pending',
+            enqueue_error: enqueueErrMsg,
+          },
+        })
+      } else {
+        await safeAddAutoRerenderJobEvent({
+          job_id: jobId,
+          level: 'info',
+          step: 'auto_rerender_enqueue_recovered',
+          message: 'Rerender enqueue failed; chunk render_status restored to rendered',
+          payload: {
+            ...base,
+            from_status: 'rerender_pending',
+            to_status: 'rendered',
+            reason: 'enqueue_failed',
+            enqueue_error: enqueueErrMsg,
+          },
+        })
+      }
     } else {
       await safeAddAutoRerenderJobEvent({
         job_id: jobId,
