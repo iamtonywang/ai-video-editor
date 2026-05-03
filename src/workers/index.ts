@@ -2175,6 +2175,33 @@ function normalizeRenderChunkIdentityScoreForPersist(score: number): number | nu
 
 const STABLE_IDENTITY_WINDOW_LIMIT = 3
 
+/** Summary for Storage manifest; not used for gate/rerender. */
+type StableIdentityObservationSummary = {
+  stable_identity_score: number | null
+  stable_window_size: number
+  drift_summary: {
+    excluded_drift_count: number
+    skipped_count: number
+  }
+}
+
+const IDENTITY_MEMORY_MANIFEST_KEY_RE =
+  /^projects\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/identity\/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\/memory-manifest\.json$/
+
+function expectedIdentityMemoryManifestKey(projectId: string, identityProfileId: string): string {
+  const pid = String(projectId).trim()
+  const iid = String(identityProfileId).trim()
+  return `projects/${pid}/identity/${iid}/memory-manifest.json`
+}
+
+function isCanonicalIdentityMemoryManifestKey(
+  key: string,
+  projectId: string,
+  identityProfileId: string
+): boolean {
+  return key === expectedIdentityMemoryManifestKey(projectId, identityProfileId) && IDENTITY_MEMORY_MANIFEST_KEY_RE.test(key)
+}
+
 type StableIdentitySkipReasonKey =
   | 'key_mismatch'
   | 'download_failed'
@@ -2237,6 +2264,7 @@ function parseIdentitySnapshotForStableObservation(snap: unknown): {
 /**
  * Read-only: loads prior chunks' state-out identity_snapshot; does not affect gate/rerender.
  * Never throws; failures are reflected in counts / null stable score.
+ * Returns a summary for Storage manifest; `null` only on unexpected failure (manifest should skip).
  */
 async function observeRenderChunkStableIdentity(params: {
   jobId: string
@@ -2245,7 +2273,7 @@ async function observeRenderChunkStableIdentity(params: {
   currentChunkId: string
   currentChunkIndex: number
   normalizedScore: number | null
-}): Promise<void> {
+}): Promise<StableIdentityObservationSummary | null> {
   const { jobId, projectId, sceneId, currentChunkId, normalizedScore } = params
   let currentChunkIndex = params.currentChunkIndex
   if (!Number.isFinite(currentChunkIndex)) {
@@ -2258,6 +2286,12 @@ async function observeRenderChunkStableIdentity(params: {
     Number.isFinite(normalizedScore)
       ? normalizedScore
       : null
+
+  const emptySummary = (): StableIdentityObservationSummary => ({
+    stable_identity_score: null,
+    stable_window_size: STABLE_IDENTITY_WINDOW_LIMIT,
+    drift_summary: { excluded_drift_count: 0, skipped_count: 0 },
+  })
 
   const emit = async (payload: Record<string, unknown>) => {
     await safeAddRenderChunkStateKeyJobEvent({
@@ -2284,7 +2318,7 @@ async function observeRenderChunkStableIdentity(params: {
         stable_delta: null,
         used_chunk_ids: [],
       })
-      return
+      return emptySummary()
     }
 
     const hist = await supabaseServer
@@ -2312,7 +2346,7 @@ async function observeRenderChunkStableIdentity(params: {
         stable_delta: null,
         used_chunk_ids: [],
       })
-      return
+      return emptySummary()
     }
 
     const rows = Array.isArray(hist.data) ? hist.data : []
@@ -2438,6 +2472,14 @@ async function observeRenderChunkStableIdentity(params: {
       payload.skip_reason_counts = skip_reason_counts
     }
     await emit(payload)
+    return {
+      stable_identity_score,
+      stable_window_size: STABLE_IDENTITY_WINDOW_LIMIT,
+      drift_summary: {
+        excluded_drift_count,
+        skipped_count,
+      },
+    }
   } catch (e) {
     console.warn('observeRenderChunkStableIdentity unexpected', getErrorMessage(e))
     try {
@@ -2457,6 +2499,141 @@ async function observeRenderChunkStableIdentity(params: {
     } catch {
       /* ignore */
     }
+    return null
+  }
+}
+
+async function safeIdentityMemoryManifestJobEvent(params: {
+  job_id: string
+  level: string
+  step: string
+  message: string
+  payload?: Record<string, unknown>
+}): Promise<void> {
+  try {
+    await safeAddRenderChunkStateKeyJobEvent({
+      job_id: params.job_id,
+      level: params.level,
+      step: params.step,
+      message: params.message,
+      payload: params.payload,
+    })
+  } catch (e) {
+    console.warn(`${params.step} job_events insert failed`, getErrorMessage(e))
+  }
+}
+
+/**
+ * Writes identity memory manifest to project-media; observability only, never throws.
+ */
+async function persistIdentityMemoryManifest(params: {
+  jobId: string
+  projectId: string
+  identityProfileId: string
+  sequenceId: string
+  sceneId: string
+  chunkId: string
+  summary: StableIdentityObservationSummary
+}): Promise<void> {
+  const { jobId, projectId, identityProfileId, sequenceId, sceneId, chunkId, summary } = params
+  try {
+    const manifestKey = expectedIdentityMemoryManifestKey(projectId, identityProfileId)
+    if (!isCanonicalIdentityMemoryManifestKey(manifestKey, projectId, identityProfileId)) {
+      await safeIdentityMemoryManifestJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'identity_memory_manifest_skipped',
+        message: 'Identity memory manifest not uploaded: key is not canonical',
+        payload: {
+          reason: 'manifest_key_not_canonical',
+          manifest_key: manifestKey,
+          latest_chunk_id: chunkId,
+        },
+      })
+      return
+    }
+
+    const updatedAt = new Date().toISOString()
+    const manifestBody = {
+      schema_version: 1,
+      type: 'identity_memory_manifest',
+      project_id: projectId,
+      identity_profile_id: identityProfileId,
+      sequence_id: sequenceId,
+      scene_id: sceneId,
+      latest_chunk_id: chunkId,
+      source_job_id: jobId,
+      stable_identity_score: summary.stable_identity_score,
+      stable_window_size: summary.stable_window_size,
+      drift_summary: {
+        excluded_drift_count: summary.drift_summary.excluded_drift_count,
+        skipped_count: summary.drift_summary.skipped_count,
+      },
+      updated_at: updatedAt,
+    }
+    const jsonBody = JSON.stringify(manifestBody)
+    const byteSize = Buffer.byteLength(jsonBody, 'utf8')
+    if (byteSize > MAX_RENDER_CHUNK_STATE_JSON_BYTES) {
+      await safeIdentityMemoryManifestJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'identity_memory_manifest_too_large',
+        message: `Identity memory manifest exceeds ${MAX_RENDER_CHUNK_STATE_JSON_BYTES} bytes`,
+        payload: {
+          manifest_key: manifestKey,
+          latest_chunk_id: chunkId,
+          byte_size: byteSize,
+          max_bytes: MAX_RENDER_CHUNK_STATE_JSON_BYTES,
+        },
+      })
+      return
+    }
+
+    const upload = await supabaseServer.storage.from('project-media').upload(manifestKey, Buffer.from(jsonBody, 'utf8'), {
+      contentType: 'application/json',
+      upsert: true,
+    })
+    if (upload.error) {
+      await safeIdentityMemoryManifestJobEvent({
+        job_id: jobId,
+        level: 'warn',
+        step: 'identity_memory_manifest_upload_failed',
+        message: upload.error.message,
+        payload: {
+          manifest_key: manifestKey,
+          latest_chunk_id: chunkId,
+          error: upload.error.message,
+        },
+      })
+      return
+    }
+
+    await safeIdentityMemoryManifestJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'identity_memory_manifest_recorded',
+      message: 'Identity memory manifest stored in project-media',
+      payload: {
+        identity_profile_id: identityProfileId,
+        manifest_key: manifestKey,
+        latest_chunk_id: chunkId,
+        stable_identity_score: summary.stable_identity_score,
+        stable_window_size: summary.stable_window_size,
+      },
+    })
+  } catch (e) {
+    const msg = getErrorMessage(e)
+    console.warn('persistIdentityMemoryManifest unexpected', msg)
+    await safeIdentityMemoryManifestJobEvent({
+      job_id: jobId,
+      level: 'warn',
+      step: 'identity_memory_manifest_upload_failed',
+      message: msg,
+      payload: {
+        latest_chunk_id: chunkId,
+        error: msg,
+      },
+    })
   }
 }
 
@@ -4662,7 +4839,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       : typeof rawChunkIndexStable === 'string'
         ? Number(rawChunkIndexStable)
         : NaN
-  await observeRenderChunkStableIdentity({
+  const stableObservationSummary = await observeRenderChunkStableIdentity({
     jobId,
     projectId,
     sceneId: String(chunkRow.data.scene_id),
@@ -4670,6 +4847,45 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     currentChunkIndex: currentChunkIndexForStable,
     normalizedScore,
   })
+
+  if (!stableObservationSummary) {
+    await safeIdentityMemoryManifestJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'identity_memory_manifest_skipped',
+      message: 'Identity memory manifest not written: stable observation unavailable',
+      payload: {
+        reason: 'stable_observation_unavailable',
+        latest_chunk_id: chunkId,
+      },
+    })
+  } else {
+    const profileRaw = renderInput.identity_profile_id
+    const profileIdStr =
+      typeof profileRaw === 'string' && profileRaw.trim() !== '' ? profileRaw.trim() : ''
+    if (!profileIdStr || !isValidUuid(profileIdStr)) {
+      await safeIdentityMemoryManifestJobEvent({
+        job_id: jobId,
+        level: 'info',
+        step: 'identity_memory_manifest_skipped',
+        message: 'Identity memory manifest not written: identity_profile_id missing or invalid',
+        payload: {
+          reason: 'identity_profile_missing_or_invalid',
+          latest_chunk_id: chunkId,
+        },
+      })
+    } else {
+      await persistIdentityMemoryManifest({
+        jobId,
+        projectId,
+        identityProfileId: profileIdStr,
+        sequenceId: String(seqRow.data!.id),
+        sceneId: String(chunkRow.data.scene_id),
+        chunkId,
+        summary: stableObservationSummary,
+      })
+    }
+  }
 
   const gateRecordSummary = await recordRenderChunkQualityGateEvaluation({
     jobId,
