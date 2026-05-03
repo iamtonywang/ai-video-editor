@@ -2050,24 +2050,43 @@ function buildAssetMetaForRenderInput(
   }
 }
 
+/** `sequence_chunks.instruction`: trim, empty → null, non-string → null. */
+function normalizeSequenceChunkInstruction(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const t = raw.trim()
+  return t === '' ? null : t
+}
+
 async function safeAddJobEventRenderInputResolved(
   jobId: string,
   renderInput: Record<string, unknown>
 ): Promise<void> {
   try {
-    const sik = renderInput.state_in_key
-    const pok = renderInput.prev_state_out_key
-    const pcrs = renderInput.prev_chunk_render_status
-    const pChecked = renderInput.prev_state_out_consistency_checked
-    const pPassed = renderInput.prev_state_out_consistency_passed
-    const pFailReason = renderInput.prev_state_out_consistency_failure_reason
+    const instructionRaw = renderInput.instruction
+    const instruction_present =
+      typeof instructionRaw === 'string' && instructionRaw.length > 0
+    const instruction_length =
+      typeof instructionRaw === 'string' ? instructionRaw.length : 0
+
+    const sanitizedRenderInput = { ...renderInput }
+    delete sanitizedRenderInput.instruction
+
+    const sik = sanitizedRenderInput.state_in_key
+    const pok = sanitizedRenderInput.prev_state_out_key
+    const pcrs = sanitizedRenderInput.prev_chunk_render_status
+    const pChecked = sanitizedRenderInput.prev_state_out_consistency_checked
+    const pPassed = sanitizedRenderInput.prev_state_out_consistency_passed
+    const pFailReason = sanitizedRenderInput.prev_state_out_consistency_failure_reason
     await addJobEvent({
       job_id: jobId,
       level: 'info',
       step: 'render_input_resolved',
       message: 'Render input contract resolved',
       payload: {
-        render_input: renderInput,
+        render_input: sanitizedRenderInput,
+        instruction_present,
+        instruction_length,
+        instruction_source: 'sequence_chunks.instruction',
         state_in_key_present: typeof sik === 'string' && sik.trim() !== '',
         prev_state_out_key_present: typeof pok === 'string' && pok.trim() !== '',
         prev_chunk_render_status:
@@ -3931,6 +3950,7 @@ async function resolveRenderInputContract(params: {
     chunk_index: number | string | null
     identity_score?: number | string | null
     style_score?: number | string | null
+    instruction?: unknown
   }
   scene: {
     id: string
@@ -4229,12 +4249,15 @@ async function resolveRenderInputContract(params: {
   const difficulty_level =
     diffRaw != null && String(diffRaw).trim() !== '' ? String(diffRaw) : null
 
+  const cleanInstruction = normalizeSequenceChunkInstruction(chunk.instruction)
+
   return {
     project_id: projectId,
     sequence_id: sequenceId,
     scene_id: sceneId,
     chunk_id: chunkId,
     chunk_index: chunkIndexSafe,
+    instruction: cleanInstruction,
     source_asset_id: resolvedSourceAssetId,
     reference_asset_id,
     identity_profile_id,
@@ -4312,7 +4335,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
   const chunkRow = await supabaseServer
     .from('sequence_chunks')
     .select(
-      'id, scene_id, chunk_index, render_status, identity_score, style_score, identity_attempt_count'
+      'id, scene_id, chunk_index, render_status, identity_score, style_score, identity_attempt_count, instruction'
     )
     .eq('id', chunkId)
     .maybeSingle()
@@ -4517,6 +4540,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       chunk_index: chunkRow.data.chunk_index as number | string | null,
       identity_score: chunkRow.data.identity_score as number | string | null | undefined,
       style_score: chunkRow.data.style_score as number | string | null | undefined,
+      instruction: chunkRow.data.instruction,
     },
     scene: {
       id: String(sceneRow.data.id),
