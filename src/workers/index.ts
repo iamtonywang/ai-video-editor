@@ -4,6 +4,7 @@ import sharp from 'sharp'
 import { jobQueue, QUEUE_NAMES } from '@/lib/queue'
 import { redisConnection } from '@/lib/queue/redis'
 import { enqueueRenderChunkRerenderJob } from '@/lib/server/enqueue-render-chunk-rerender'
+import { parseIdentityAttemptCount } from '@/lib/server/parse-identity-attempt-count'
 import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
 import { supabaseServer } from '@/lib/supabase/server'
 
@@ -2012,16 +2013,6 @@ function parseQualityGateThresholdForGate(raw: unknown): number | null {
 
 const AUTO_RERENDER_MAX_ATTEMPT = 3
 
-function parseIdentityAttemptCountForAutoRerender(raw: unknown): number | null {
-  if (raw === null || raw === undefined) return null
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
-  if (typeof raw === 'string' && raw.trim() !== '') {
-    const n = Number(raw.trim())
-    return Number.isFinite(n) ? n : null
-  }
-  return null
-}
-
 async function safeAddAutoRerenderJobEvent(params: {
   job_id: string
   level: string
@@ -2973,21 +2964,7 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
   const { jobId, projectId, sequenceId, chunkId, normalizedScore, identityAttemptCountRaw } = params
   const base = { project_id: projectId, chunk_id: chunkId }
 
-  const parsedAttempt = parseIdentityAttemptCountForAutoRerender(identityAttemptCountRaw)
-  if (parsedAttempt === null) {
-    await safeAddAutoRerenderJobEvent({
-      job_id: jobId,
-      level: 'info',
-      step: 'auto_rerender_skipped',
-      message: 'Auto rerender skipped: identity_attempt_count invalid',
-      payload: {
-        ...base,
-        reason_code: 'AUTO_RERENDER_ATTEMPT_COUNT_INVALID',
-      },
-    })
-    return
-  }
-  const currentAttempt = parsedAttempt
+  const currentAttempt = parseIdentityAttemptCount(identityAttemptCountRaw)
 
   const identityScore =
     normalizedScore !== null && Number.isFinite(normalizedScore) ? normalizedScore : null
@@ -3090,6 +3067,8 @@ async function evaluateAutoRerenderAfterRenderChunk(params: {
         existing_job_id: String(dupJobs.data.id),
         identity_score: identityScore,
         threshold: thresholdNum,
+        current_attempt: currentAttempt,
+        max_attempt: AUTO_RERENDER_MAX_ATTEMPT,
       },
     })
     return

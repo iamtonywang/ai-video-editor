@@ -1,17 +1,11 @@
 import type { Queue } from 'bullmq'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getMvpJobCostPolicy } from '@/lib/costs/policy'
+import { parseIdentityAttemptCount } from '@/lib/server/parse-identity-attempt-count'
 
 const RERENDER_ALLOWED_RENDER_STATUS = new Set<string>(['failed', 'rerender_pending'])
 
 export type EnqueueRenderChunkRerenderReason = 'manual_rerender' | 'auto_rerender'
-
-function parseAttemptCount(raw: unknown): number {
-  if (raw == null) return 0
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
-  const n = Number(raw)
-  return Number.isFinite(n) ? n : 0
-}
 
 export type EnqueueRenderChunkRerenderResult =
   | { ok: true; jobId: string }
@@ -76,7 +70,9 @@ export async function enqueueRenderChunkRerenderJob(params: {
   }
 
   const previousRenderStatus = currentRenderStatus
-  const previousIdentityAttemptCount = parseAttemptCount(chunkRes.data.identity_attempt_count)
+  const previousIdentityAttemptCount = parseIdentityAttemptCount(
+    chunkRes.data.identity_attempt_count
+  )
   const nextIdentityAttemptCount = previousIdentityAttemptCount + 1
 
   const transition = await supabase
