@@ -32,6 +32,8 @@ function buildProviderRequestBody(input: RenderChunkProviderInput): string {
     scene_id: input.scene_id,
     chunk_id: input.chunk_id,
     chunk_index: input.chunk_index,
+    first_chunk: input.first_chunk,
+    render_mode: input.render_mode,
     output_asset_key: input.output_asset_key,
     instruction: input.instruction,
     identity_profile_id: input.identity_profile_id,

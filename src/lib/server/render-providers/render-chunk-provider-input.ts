@@ -5,12 +5,18 @@ export type RenderChunkProviderInput = {
   scene_id: string
   chunk_id: string
   chunk_index: number | null
+  /** `chunk_index === 0`일 때만 true (`readChunkIndexField` 결과가 정확히 0). */
+  first_chunk: boolean
+  /** 현재 render_chunk 파이프라인 고정값. */
+  render_mode: 'render_chunk'
   output_asset_key: string
   instruction: string | null
   identity_profile_id: string | null
   reference_asset_id: string | null
   source_asset_id: string | null
+  /** 현재 chunk 생성에 provider가 사용할 입력 state storage key. 첫 청크에서는 null일 수 있음. */
   state_in_key: string | null
+  /** 이전 chunk 결과에서 온 원본 state_out key 추적값(동일 문자열이 `state_in_key`와 겹칠 수 있음). */
   prev_state_out_key: string | null
   sequence_meta: Record<string, unknown> | null
   scene_meta: Record<string, unknown> | null
@@ -105,13 +111,18 @@ export function buildRenderChunkProviderInput(params: {
     return { ok: false, reason: 'MISSING_CHUNK_ID' }
   }
 
+  const chunkIndexVal = readChunkIndexField(o.chunk_index)
+  const first_chunk = chunkIndexVal === 0
+
   const input: RenderChunkProviderInput = {
     job_id: jid,
     project_id: projectId,
     sequence_id: sequenceId,
     scene_id: sceneId,
     chunk_id: chunkId,
-    chunk_index: readChunkIndexField(o.chunk_index),
+    chunk_index: chunkIndexVal,
+    first_chunk,
+    render_mode: 'render_chunk',
     output_asset_key: outKey,
     instruction: readInstructionField(o.instruction),
     identity_profile_id: readNullableIdField(o.identity_profile_id),
