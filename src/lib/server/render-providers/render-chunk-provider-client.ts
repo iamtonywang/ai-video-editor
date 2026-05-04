@@ -3,14 +3,44 @@ import type { RenderChunkProviderInput } from './render-chunk-provider-input'
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
 
+/** `state_out_payload`에 저장 허용되는 최소 키만 (전체 provider JSON 저장 금지). */
+export const WHITELIST_STATE_OUT_PAYLOAD_KEYS = [
+  'schema_version',
+  'provider',
+  'model',
+  'model_version',
+  'state_key',
+  'latent_state_key',
+  'temporal_state_key',
+  'identity_state_key',
+  'scene_state_key',
+  'camera_state_key',
+  'lighting_state_key',
+  'background_state_key',
+  'consistency_score',
+  'identity_score',
+  'style_score',
+  'temporal_score',
+  'drift_score',
+  'created_at',
+] as const
+
 export type RenderChunkWithProviderFailureReason =
   | 'provider_disabled'
   | 'provider_failed'
   | 'provider_timeout'
   | 'provider_invalid_response'
 
+export type RenderChunkWithProviderSuccess = {
+  ok: true
+  buffer: Buffer
+  provider_meta?: Record<string, unknown>
+  state_out_payload?: Record<string, unknown>
+  embedding_meta?: Record<string, unknown>
+}
+
 export type RenderChunkWithProviderResult =
-  | { ok: true; buffer: Buffer }
+  | RenderChunkWithProviderSuccess
   | { ok: false; reason: RenderChunkWithProviderFailureReason }
 
 function isProviderExplicitlyEnabled(): boolean {
@@ -21,6 +51,39 @@ function isProviderExplicitlyEnabled(): boolean {
 function isLikelyWebPBuffer(buf: Buffer): boolean {
   if (!Buffer.isBuffer(buf) || buf.length < 12) return false
   return buf.subarray(0, 4).toString('ascii') === 'RIFF' && buf.subarray(8, 12).toString('ascii') === 'WEBP'
+}
+
+function pickPlainObjectMeta(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function isSafeWhitelistScalar(v: unknown): boolean {
+  if (v === null) return true
+  if (typeof v === 'string' || typeof v === 'boolean') return true
+  if (typeof v === 'number' && Number.isFinite(v)) return true
+  return false
+}
+
+/** 저장용: 허용 키만, 값은 string | number | boolean | null 만 통과. */
+export function whitelistProviderStateOutPayload(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of WHITELIST_STATE_OUT_PAYLOAD_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue
+    const v = raw[key]
+    if (isSafeWhitelistScalar(v)) {
+      out[key] = v
+    }
+  }
+  return out
+}
+
+function warnMetaIgnored(input: RenderChunkProviderInput, field: string): void {
+  console.warn('[render_chunk] provider_response_meta_ignored', {
+    job_id: input.job_id,
+    chunk_id: input.chunk_id,
+    field,
+  })
 }
 
 /** HTTP 요청 본문. provider 서버로만 전송; 로그/이벤트에 넣지 않는다. */
@@ -47,6 +110,62 @@ function buildProviderRequestBody(input: RenderChunkProviderInput): string {
     reference_asset_meta: input.reference_asset_meta,
     prev_chunk_meta: input.prev_chunk_meta,
   })
+}
+
+function decodeWebpFromJsonObject(
+  o: Record<string, unknown>
+): { buffer: Buffer } | null {
+  const b64Raw = o.webp_base64 ?? o.image_base64 ?? o.output_base64
+  if (typeof b64Raw !== 'string' || b64Raw.trim() === '') return null
+  try {
+    const buf = Buffer.from(b64Raw.trim(), 'base64')
+    if (isLikelyWebPBuffer(buf)) return { buffer: buf }
+  } catch {
+    return null
+  }
+  return null
+}
+
+function extractOptionalMetaFromJson(
+  input: RenderChunkProviderInput,
+  o: Record<string, unknown>
+): Pick<
+  RenderChunkWithProviderSuccess,
+  'provider_meta' | 'state_out_payload' | 'embedding_meta'
+> {
+  const out: Pick<
+    RenderChunkWithProviderSuccess,
+    'provider_meta' | 'state_out_payload' | 'embedding_meta'
+  > = {}
+
+  const pm = pickPlainObjectMeta(o.provider_meta)
+  if (o.provider_meta !== undefined && pm == null) {
+    warnMetaIgnored(input, 'provider_meta')
+  } else if (pm != null && Object.keys(pm).length > 0) {
+    out.provider_meta = pm
+  }
+
+  const em = pickPlainObjectMeta(o.embedding_meta)
+  if (o.embedding_meta !== undefined && em == null) {
+    warnMetaIgnored(input, 'embedding_meta')
+  } else if (em != null && Object.keys(em).length > 0) {
+    out.embedding_meta = em
+  }
+
+  const rawState = o.state_out_payload
+  const stateObj = pickPlainObjectMeta(rawState)
+  if (rawState !== undefined && stateObj == null) {
+    warnMetaIgnored(input, 'state_out_payload')
+  } else if (stateObj != null) {
+    const wl = whitelistProviderStateOutPayload(stateObj)
+    if (Object.keys(wl).length > 0) {
+      out.state_out_payload = wl
+    } else if (Object.keys(stateObj).length > 0) {
+      warnMetaIgnored(input, 'state_out_payload_whitelist_empty')
+    }
+  }
+
+  return out
 }
 
 async function executeRenderChunkProviderHttp(params: {
@@ -98,21 +217,20 @@ async function executeRenderChunkProviderHttp(params: {
     } catch {
       return { ok: false, reason: 'provider_invalid_response' }
     }
-    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const o = parsed as Record<string, unknown>
-      const b64Raw = o.webp_base64 ?? o.image_base64 ?? o.output_base64
-      if (typeof b64Raw === 'string' && b64Raw.trim() !== '') {
-        try {
-          const buf = Buffer.from(b64Raw.trim(), 'base64')
-          if (isLikelyWebPBuffer(buf)) {
-            return { ok: true, buffer: buf }
-          }
-        } catch {
-          return { ok: false, reason: 'provider_invalid_response' }
-        }
-      }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ok: false, reason: 'provider_invalid_response' }
     }
-    return { ok: false, reason: 'provider_invalid_response' }
+    const o = parsed as Record<string, unknown>
+    const decoded = decodeWebpFromJsonObject(o)
+    if (decoded == null) {
+      return { ok: false, reason: 'provider_invalid_response' }
+    }
+    const meta = extractOptionalMetaFromJson(input, o)
+    return {
+      ok: true,
+      buffer: decoded.buffer,
+      ...meta,
+    }
   }
 
   return { ok: false, reason: 'provider_failed' }

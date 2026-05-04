@@ -12,7 +12,10 @@ import {
 } from '@/lib/server/identity/identity-memory-manifest-keys'
 import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
 import { buildRenderChunkProviderInput } from '@/lib/server/render-providers/render-chunk-provider-input'
-import { renderChunkWithProvider } from '@/lib/server/render-providers/render-chunk-provider-client'
+import {
+  renderChunkWithProvider,
+  whitelistProviderStateOutPayload,
+} from '@/lib/server/render-providers/render-chunk-provider-client'
 import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
@@ -1785,6 +1788,10 @@ async function persistRenderChunkStateOut(params: {
   identityScoreSource?: unknown
   /** Parsed finite previous-chunk identity score, or null; observability only. */
   prevChunkIdentityScore?: number | null
+  /**
+   * 외부 provider JSON에 포함된 state 일부. 전체 payload 저장 금지 — 클라이언트와 동일 화이트리스트로 재필터.
+   */
+  providerStateOutPayload?: Record<string, unknown> | null
 }): Promise<void> {
   const {
     jobId,
@@ -1795,6 +1802,7 @@ async function persistRenderChunkStateOut(params: {
     normalizedScore,
     identityScoreSource,
     prevChunkIdentityScore,
+    providerStateOutPayload,
   } = params
   const sequenceIdNorm = String(params.sequenceId ?? '').trim()
   if (!sequenceIdNorm || !isValidUuid(sequenceIdNorm)) {
@@ -1833,7 +1841,11 @@ async function persistRenderChunkStateOut(params: {
     identityScoreSourceRaw: identityScoreSource,
     prevChunkIdentityScore: prevChunkIdentityScore ?? null,
   })
-  const statePayload = {
+  const mergedProviderStateOut =
+    providerStateOutPayload != null
+      ? whitelistProviderStateOutPayload(providerStateOutPayload)
+      : null
+  const statePayload: Record<string, unknown> = {
     schema_version: 1,
     type: 'render_chunk_state_out',
     project_id: projectId,
@@ -1847,6 +1859,9 @@ async function persistRenderChunkStateOut(params: {
     render_status: 'rendered',
     state_source: 'render_chunk_success',
     created_at: createdAt,
+    ...(mergedProviderStateOut != null && Object.keys(mergedProviderStateOut).length > 0
+      ? { provider_state_out: mergedProviderStateOut }
+      : {}),
   }
 
   await safeAddRenderChunkStateKeyJobEvent({
@@ -4639,6 +4654,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       : null
 
   let webpBuffer: Buffer
+  let providerStateOutForPersist: Record<string, unknown> | null = null
   try {
     let webpBufferFromProvider: Buffer | null = null
 
@@ -4646,6 +4662,12 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       const providerResult = await renderChunkWithProvider(providerInputResult.input)
       if (providerResult.ok) {
         webpBufferFromProvider = providerResult.buffer
+        if (
+          providerResult.state_out_payload != null &&
+          Object.keys(providerResult.state_out_payload).length > 0
+        ) {
+          providerStateOutForPersist = providerResult.state_out_payload
+        }
       } else {
         await safeAddRenderChunkProviderFallbackJobEvent({
           job_id: jobId,
@@ -4946,6 +4968,7 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     normalizedScore,
     identityScoreSource: identityScoreSourceForGate,
     prevChunkIdentityScore: prevChunkIdentityScoreForSnapshot,
+    providerStateOutPayload: providerStateOutForPersist,
   })
 
   const rawChunkIndexStable = chunkRow.data.chunk_index
