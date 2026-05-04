@@ -12,6 +12,7 @@ import {
 } from '@/lib/server/identity/identity-memory-manifest-keys'
 import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
 import { buildRenderChunkProviderInput } from '@/lib/server/render-providers/render-chunk-provider-input'
+import { renderChunkWithProvider } from '@/lib/server/render-providers/render-chunk-provider-client'
 import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
@@ -2135,6 +2136,30 @@ async function safeAddJobEventRenderInputResolved(
     })
   } catch (e) {
     console.warn('render_input_resolved job_events insert failed', getErrorMessage(e))
+  }
+}
+
+async function safeAddRenderChunkProviderFallbackJobEvent(params: {
+  job_id: string
+  project_id: string
+  chunk_id: string
+  reason: string
+}): Promise<void> {
+  try {
+    await addJobEvent({
+      job_id: params.job_id,
+      level: 'warn',
+      step: 'provider_fallback',
+      message: 'Render chunk provider fallback to dummy',
+      payload: {
+        job_id: params.job_id,
+        project_id: params.project_id,
+        chunk_id: params.chunk_id,
+        reason: params.reason,
+      },
+    })
+  } catch (e) {
+    console.warn('provider_fallback job_events insert failed', getErrorMessage(e))
   }
 }
 
@@ -4606,20 +4631,40 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
       chunk_id: chunkId,
       reason: providerInputResult.reason,
     })
-  } else {
-    void providerInputResult.input
   }
+
+  const instructionForDummy =
+    typeof renderInput.instruction === 'string' || renderInput.instruction === null
+      ? (renderInput.instruction as string | null)
+      : null
 
   let webpBuffer: Buffer
   try {
-    webpBuffer = await renderChunkDummyWebp({
-      projectId,
-      chunkId,
-      instruction:
-        typeof renderInput.instruction === 'string' || renderInput.instruction === null
-          ? (renderInput.instruction as string | null)
-          : null,
-    })
+    let webpBufferFromProvider: Buffer | null = null
+
+    if (providerInputResult.ok) {
+      const providerResult = await renderChunkWithProvider(providerInputResult.input)
+      if (providerResult.ok) {
+        webpBufferFromProvider = providerResult.buffer
+      } else {
+        await safeAddRenderChunkProviderFallbackJobEvent({
+          job_id: jobId,
+          project_id: projectId,
+          chunk_id: chunkId,
+          reason: providerResult.reason,
+        })
+      }
+    }
+
+    if (webpBufferFromProvider != null) {
+      webpBuffer = webpBufferFromProvider
+    } else {
+      webpBuffer = await renderChunkDummyWebp({
+        projectId,
+        chunkId,
+        instruction: instructionForDummy,
+      })
+    }
   } catch (err) {
     const msg = getErrorMessage(err)
     await supabaseServer.from('sequence_chunks').update({ render_status: 'failed' }).eq('id', chunkId)
