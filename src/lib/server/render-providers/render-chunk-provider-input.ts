@@ -18,6 +18,8 @@ export type RenderChunkProviderInput = {
   state_in_key: string | null
   /** 이전 chunk 결과에서 온 원본 state_out key 추적값(동일 문자열이 `state_in_key`와 겹칠 수 있음). */
   prev_state_out_key: string | null
+  /** 이전 chunk state-out.json의 `provider_state_out`(화이트리스트 적용본). 첫 청크는 null. */
+  prev_provider_state_out: Record<string, unknown> | null
   sequence_meta: Record<string, unknown> | null
   scene_meta: Record<string, unknown> | null
   source_asset_meta: Record<string, unknown> | null
@@ -28,6 +30,48 @@ export type RenderChunkProviderInput = {
 export type BuildRenderChunkProviderInputResult =
   | { ok: true; input: RenderChunkProviderInput }
   | { ok: false; reason: string }
+
+/** `state_out_payload` / `provider_state_out` 저장·전달에 허용되는 최소 키만. */
+export const WHITELIST_STATE_OUT_PAYLOAD_KEYS = [
+  'schema_version',
+  'provider',
+  'model',
+  'model_version',
+  'state_key',
+  'latent_state_key',
+  'temporal_state_key',
+  'identity_state_key',
+  'scene_state_key',
+  'camera_state_key',
+  'lighting_state_key',
+  'background_state_key',
+  'consistency_score',
+  'identity_score',
+  'style_score',
+  'temporal_score',
+  'drift_score',
+  'created_at',
+] as const
+
+function isSafeWhitelistScalar(v: unknown): boolean {
+  if (v === null) return true
+  if (typeof v === 'string' || typeof v === 'boolean') return true
+  if (typeof v === 'number' && Number.isFinite(v)) return true
+  return false
+}
+
+/** 저장·HTTP 전달용: 허용 키만, 값은 string | number | boolean | null 만 통과. */
+export function whitelistProviderStateOutPayload(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of WHITELIST_STATE_OUT_PAYLOAD_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue
+    const v = raw[key]
+    if (isSafeWhitelistScalar(v)) {
+      out[key] = v
+    }
+  }
+  return out
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -66,6 +110,18 @@ function readMetaField(obj: Record<string, unknown>, key: string): Record<string
   const v = obj[key]
   if (isPlainObject(v)) return v
   return null
+}
+
+function readPrevProviderStateOutField(
+  o: Record<string, unknown>,
+  first_chunk: boolean
+): Record<string, unknown> | null {
+  if (first_chunk) return null
+  const v = o.prev_provider_state_out
+  if (v === undefined || v === null) return null
+  if (!isPlainObject(v)) return null
+  const w = whitelistProviderStateOutPayload(v)
+  return Object.keys(w).length > 0 ? w : null
 }
 
 export function buildRenderChunkProviderInput(params: {
@@ -130,6 +186,7 @@ export function buildRenderChunkProviderInput(params: {
     source_asset_id: readNullableIdField(o.source_asset_id),
     state_in_key: readNullableIdField(o.state_in_key),
     prev_state_out_key: readNullableIdField(o.prev_state_out_key),
+    prev_provider_state_out: readPrevProviderStateOutField(o, first_chunk),
     sequence_meta: readMetaField(o, 'sequence_meta'),
     scene_meta: readMetaField(o, 'scene_meta'),
     source_asset_meta: readMetaField(o, 'source_asset_meta'),

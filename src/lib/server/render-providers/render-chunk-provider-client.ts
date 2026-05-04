@@ -1,29 +1,10 @@
-import type { RenderChunkProviderInput } from './render-chunk-provider-input'
+import {
+  type RenderChunkProviderInput,
+  whitelistProviderStateOutPayload,
+} from './render-chunk-provider-input'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
-
-/** `state_out_payload`에 저장 허용되는 최소 키만 (전체 provider JSON 저장 금지). */
-export const WHITELIST_STATE_OUT_PAYLOAD_KEYS = [
-  'schema_version',
-  'provider',
-  'model',
-  'model_version',
-  'state_key',
-  'latent_state_key',
-  'temporal_state_key',
-  'identity_state_key',
-  'scene_state_key',
-  'camera_state_key',
-  'lighting_state_key',
-  'background_state_key',
-  'consistency_score',
-  'identity_score',
-  'style_score',
-  'temporal_score',
-  'drift_score',
-  'created_at',
-] as const
 
 export type RenderChunkWithProviderFailureReason =
   | 'provider_disabled'
@@ -58,26 +39,6 @@ function pickPlainObjectMeta(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
-function isSafeWhitelistScalar(v: unknown): boolean {
-  if (v === null) return true
-  if (typeof v === 'string' || typeof v === 'boolean') return true
-  if (typeof v === 'number' && Number.isFinite(v)) return true
-  return false
-}
-
-/** 저장용: 허용 키만, 값은 string | number | boolean | null 만 통과. */
-export function whitelistProviderStateOutPayload(raw: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const key of WHITELIST_STATE_OUT_PAYLOAD_KEYS) {
-    if (!Object.prototype.hasOwnProperty.call(raw, key)) continue
-    const v = raw[key]
-    if (isSafeWhitelistScalar(v)) {
-      out[key] = v
-    }
-  }
-  return out
-}
-
 function warnMetaIgnored(input: RenderChunkProviderInput, field: string): void {
   console.warn('[render_chunk] provider_response_meta_ignored', {
     job_id: input.job_id,
@@ -104,6 +65,7 @@ function buildProviderRequestBody(input: RenderChunkProviderInput): string {
     source_asset_id: input.source_asset_id,
     state_in_key: input.state_in_key,
     prev_state_out_key: input.prev_state_out_key,
+    prev_provider_state_out: input.prev_provider_state_out,
     sequence_meta: input.sequence_meta,
     scene_meta: input.scene_meta,
     source_asset_meta: input.source_asset_meta,

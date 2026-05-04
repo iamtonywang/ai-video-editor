@@ -12,10 +12,8 @@ import {
 } from '@/lib/server/identity/identity-memory-manifest-keys'
 import { callIdentityEmbeddingEmbed } from '@/lib/server/identity-embedding-client'
 import { buildRenderChunkProviderInput } from '@/lib/server/render-providers/render-chunk-provider-input'
-import {
-  renderChunkWithProvider,
-  whitelistProviderStateOutPayload,
-} from '@/lib/server/render-providers/render-chunk-provider-client'
+import { renderChunkWithProvider } from '@/lib/server/render-providers/render-chunk-provider-client'
+import { whitelistProviderStateOutPayload } from '@/lib/server/render-providers/render-chunk-provider-input'
 import { supabaseServer } from '@/lib/supabase/server'
 
 console.log(`REDIS_URL loaded: ${process.env.REDIS_URL ? 'yes' : 'no'}`)
@@ -1974,8 +1972,12 @@ async function verifyPrevChunkStateOutForSequenceConsistency(params: {
   prevChunkId: string
   sceneId: string
   sequenceId: string
-}): Promise<{ ok: true } | { ok: false; reason: PrevStateOutConsistencyFailReason }> {
-  const { storageKey, projectId, prevChunkId, sceneId, sequenceId } = params
+  currentChunkId: string
+}): Promise<
+  | { ok: true; prev_provider_state_out?: Record<string, unknown> }
+  | { ok: false; reason: PrevStateOutConsistencyFailReason }
+> {
+  const { storageKey, projectId, prevChunkId, sceneId, sequenceId, currentChunkId } = params
   const dl = await supabaseServer.storage.from('project-media').download(storageKey)
   if (dl.error || !dl.data) {
     return { ok: false, reason: 'download_failed' }
@@ -2025,7 +2027,33 @@ async function verifyPrevChunkStateOutForSequenceConsistency(params: {
   if (oak == null || normStateOutCompareId(oak) === '') {
     return { ok: false, reason: 'schema_invalid' }
   }
-  return { ok: true }
+
+  const rawPso = o.provider_state_out
+  if (rawPso === undefined) {
+    return { ok: true }
+  }
+  if (rawPso === null || typeof rawPso !== 'object' || Array.isArray(rawPso)) {
+    console.warn('[render_chunk] prev_provider_state_out_ignored', {
+      project_id: projectId,
+      chunk_id: currentChunkId,
+      prev_chunk_id: prevChunkId,
+      reason: 'not_plain_object',
+    })
+    return { ok: true }
+  }
+  const wl = whitelistProviderStateOutPayload(rawPso as Record<string, unknown>)
+  if (Object.keys(wl).length === 0) {
+    if (Object.keys(rawPso as Record<string, unknown>).length > 0) {
+      console.warn('[render_chunk] prev_provider_state_out_ignored', {
+        project_id: projectId,
+        chunk_id: currentChunkId,
+        prev_chunk_id: prevChunkId,
+        reason: 'whitelist_empty',
+      })
+    }
+    return { ok: true }
+  }
+  return { ok: true, prev_provider_state_out: wl }
 }
 
 async function fetchSourceAssetMetaRow(assetId: string): Promise<{
@@ -4087,6 +4115,7 @@ async function resolveRenderInputContract(params: {
   let prevStateOutConsistencyChecked = false
   let prevStateOutConsistencyPassed = false
   let prevStateOutConsistencyFailureReason: string | null = null
+  let prev_provider_state_out: Record<string, unknown> | null = null
 
   const projRow = await supabaseServer
     .from('projects')
@@ -4233,7 +4262,15 @@ async function resolveRenderInputContract(params: {
             prevChunkId: String(pd.id),
             sceneId,
             sequenceId: seqCur,
+            currentChunkId: chunkId,
           })
+          if (
+            ver.ok &&
+            ver.prev_provider_state_out != null &&
+            Object.keys(ver.prev_provider_state_out).length > 0
+          ) {
+            prev_provider_state_out = ver.prev_provider_state_out
+          }
           if (!ver.ok) {
             prevStateOutConsistencyFailureReason = ver.reason
             await safeAddRenderChunkStateKeyJobEvent({
@@ -4363,6 +4400,7 @@ async function resolveRenderInputContract(params: {
       ? { prev_state_out_consistency_failure_reason: prevStateOutConsistencyFailureReason }
       : {}),
     ...(stateInKeyUpdateError != null ? { state_in_key_update_error: stateInKeyUpdateError } : {}),
+    prev_provider_state_out,
   }
 }
 
