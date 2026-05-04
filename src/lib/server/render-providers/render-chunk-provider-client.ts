@@ -11,6 +11,7 @@ export type RenderChunkWithProviderFailureReason =
   | 'provider_failed'
   | 'provider_timeout'
   | 'provider_invalid_response'
+  | 'provider_url_not_allowed'
 
 export type RenderChunkWithProviderSuccess = {
   ok: true
@@ -137,6 +138,16 @@ async function executeRenderChunkProviderHttp(params: {
   timeoutMs: number
 }): Promise<RenderChunkWithProviderResult> {
   const { input, url, apiKey, timeoutMs } = params
+
+  try {
+    const parsed = new URL(url)
+    if (parsed.protocol !== 'https:' || parsed.hostname !== 'shawwang.com') {
+      return { ok: false, reason: 'provider_url_not_allowed' }
+    }
+  } catch {
+    return { ok: false, reason: 'provider_url_not_allowed' }
+  }
+
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   let res: Response
