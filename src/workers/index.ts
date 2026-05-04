@@ -5088,24 +5088,46 @@ async function handleRenderChunkJob(payload: RenderChunkPayload) {
     }
   }
 
-  const gateRecordSummary = await recordRenderChunkQualityGateEvaluation({
-    jobId,
-    projectId,
-    chunkId,
-    identityScoreRaw: chunkRow.data.identity_score,
-    measuredIdentityScoreOverride,
-    scoreSource: identityScoreSourceForGate,
-  })
-  await evaluateAutoRerenderAfterRenderChunk({
-    jobId,
-    projectId,
-    sequenceId: String(seqRow.data!.id),
-    chunkId,
-    normalizedScore,
-    identityAttemptCountRaw: chunkRow.data.identity_attempt_count,
-    gateRecordSummary,
-    scoreSource: identityScoreSourceForGate,
-  })
+  const stubRenderChunkGateBypass =
+    process.env.RENDER_CHUNK_STUB_GATE_BYPASS === 'true' &&
+    process.env.RENDER_CHUNK_PROVIDER_ALLOW_LOCAL === 'true' &&
+    providerStateOutForPersist != null &&
+    providerStateOutForPersist.model === 'stub-provider'
+
+  if (stubRenderChunkGateBypass) {
+    await addJobEvent({
+      job_id: jobId,
+      level: 'info',
+      step: 'render_chunk_stub_provider_gate_bypassed',
+      message: 'Local stub provider: identity gate evaluation and auto-rerender skipped',
+      payload: {
+        job_id: jobId,
+        project_id: projectId,
+        chunk_id: chunkId,
+        model: 'stub-provider',
+        reason: 'local_stub_provider_test',
+      },
+    })
+  } else {
+    const gateRecordSummary = await recordRenderChunkQualityGateEvaluation({
+      jobId,
+      projectId,
+      chunkId,
+      identityScoreRaw: chunkRow.data.identity_score,
+      measuredIdentityScoreOverride,
+      scoreSource: identityScoreSourceForGate,
+    })
+    await evaluateAutoRerenderAfterRenderChunk({
+      jobId,
+      projectId,
+      sequenceId: String(seqRow.data!.id),
+      chunkId,
+      normalizedScore,
+      identityAttemptCountRaw: chunkRow.data.identity_attempt_count,
+      gateRecordSummary,
+      scoreSource: identityScoreSourceForGate,
+    })
+  }
   await addJobEvent({
     job_id: jobId,
     level: 'info',
