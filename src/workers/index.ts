@@ -2139,42 +2139,61 @@ async function safeAddJobEventRenderInputResolved(
   renderInput: Record<string, unknown>
 ): Promise<void> {
   try {
+    const fieldPresentForJobEvent = (value: unknown): boolean => {
+      if (typeof value === 'string') return value.trim() !== ''
+      if (value === null || value === undefined) return false
+      if (typeof value === 'object' && !Array.isArray(value)) {
+        return Object.keys(value as Record<string, unknown>).length > 0
+      }
+      return false
+    }
+
     const instructionRaw = renderInput.instruction
     const instruction_present =
       typeof instructionRaw === 'string' && instructionRaw.length > 0
     const instruction_length =
       typeof instructionRaw === 'string' ? instructionRaw.length : 0
 
-    const sanitizedRenderInput = { ...renderInput }
-    delete sanitizedRenderInput.instruction
+    const pcrs = renderInput.prev_chunk_render_status
+    const pChecked = renderInput.prev_state_out_consistency_checked
+    const pPassed = renderInput.prev_state_out_consistency_passed
+    const pFailReasonRaw = renderInput.prev_state_out_consistency_failure_reason
+    let prev_state_out_consistency_failure_reason: string | undefined
+    if (typeof pFailReasonRaw === 'string') {
+      const t = pFailReasonRaw.trim()
+      if (t !== '') {
+        prev_state_out_consistency_failure_reason = t.length > 120 ? t.slice(0, 120) : t
+      }
+    }
 
-    const sik = sanitizedRenderInput.state_in_key
-    const pok = sanitizedRenderInput.prev_state_out_key
-    const pcrs = sanitizedRenderInput.prev_chunk_render_status
-    const pChecked = sanitizedRenderInput.prev_state_out_consistency_checked
-    const pPassed = sanitizedRenderInput.prev_state_out_consistency_passed
-    const pFailReason = sanitizedRenderInput.prev_state_out_consistency_failure_reason
     await addJobEvent({
       job_id: jobId,
       level: 'info',
       step: 'render_input_resolved',
       message: 'Render input contract resolved',
       payload: {
-        render_input: sanitizedRenderInput,
         instruction_present,
         instruction_length,
         instruction_source: 'sequence_chunks.instruction',
-        state_in_key_present: typeof sik === 'string' && sik.trim() !== '',
-        prev_state_out_key_present: typeof pok === 'string' && pok.trim() !== '',
+        state_in_key_present: fieldPresentForJobEvent(renderInput.state_in_key),
+        prev_state_out_key_present: fieldPresentForJobEvent(renderInput.prev_state_out_key),
         prev_chunk_render_status:
           pcrs == null || (typeof pcrs === 'string' && pcrs.trim() === '')
             ? null
             : String(pcrs),
         prev_state_out_consistency_checked: pChecked === true,
         prev_state_out_consistency_passed: pPassed === true,
-        ...(typeof pFailReason === 'string' && pFailReason.trim() !== ''
-          ? { prev_state_out_consistency_failure_reason: String(pFailReason).trim() }
+        ...(prev_state_out_consistency_failure_reason != null
+          ? { prev_state_out_consistency_failure_reason }
           : {}),
+        prev_provider_state_out_present: fieldPresentForJobEvent(renderInput.prev_provider_state_out),
+        source_asset_id_present: fieldPresentForJobEvent(renderInput.source_asset_id),
+        reference_asset_id_present: fieldPresentForJobEvent(renderInput.reference_asset_id),
+        identity_profile_id_present: fieldPresentForJobEvent(renderInput.identity_profile_id),
+        source_asset_meta_present: fieldPresentForJobEvent(renderInput.source_asset_meta),
+        reference_asset_meta_present: fieldPresentForJobEvent(renderInput.reference_asset_meta),
+        identity_meta_present: fieldPresentForJobEvent(renderInput.identity_meta),
+        prev_chunk_meta_present: fieldPresentForJobEvent(renderInput.prev_chunk_meta),
       },
     })
   } catch (e) {
