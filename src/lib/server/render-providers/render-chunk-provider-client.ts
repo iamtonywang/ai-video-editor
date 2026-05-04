@@ -119,7 +119,17 @@ async function executeRenderChunkProviderHttp(params: {
 
   try {
     const parsed = new URL(url)
-    if (parsed.protocol !== 'https:' || parsed.hostname !== 'shawwang.com') {
+
+    const allowLocal =
+      process.env.RENDER_CHUNK_PROVIDER_ALLOW_LOCAL === 'true' &&
+      (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') &&
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:')
+
+    if (allowLocal) {
+      // development: localhost / loopback only when RENDER_CHUNK_PROVIDER_ALLOW_LOCAL=true
+    } else if (parsed.protocol === 'https:' && parsed.hostname === 'shawwang.com') {
+      // production: unchanged shawwang.com HTTPS allowlist
+    } else {
       return { ok: false, reason: 'provider_url_not_allowed' }
     }
   } catch {
