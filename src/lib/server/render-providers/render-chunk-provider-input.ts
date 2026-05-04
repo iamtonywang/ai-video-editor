@@ -51,6 +51,10 @@ export const WHITELIST_STATE_OUT_PAYLOAD_KEYS = [
   'temporal_score',
   'drift_score',
   'created_at',
+  // prev_provider_state_out 반영 관측(값은 isSafeWhitelistScalar와 동일)
+  'prev_provider_state_in_applied',
+  'prev_provider_state_in_reason',
+  'prev_provider_state_in_score',
 ] as const
 
 function isSafeWhitelistScalar(v: unknown): boolean {
