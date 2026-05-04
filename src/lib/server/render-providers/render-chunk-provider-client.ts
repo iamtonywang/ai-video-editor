@@ -16,9 +16,7 @@ export type RenderChunkWithProviderFailureReason =
 export type RenderChunkWithProviderSuccess = {
   ok: true
   buffer: Buffer
-  provider_meta?: Record<string, unknown>
   state_out_payload?: Record<string, unknown>
-  embedding_meta?: Record<string, unknown>
 }
 
 export type RenderChunkWithProviderResult =
@@ -92,28 +90,8 @@ function decodeWebpFromJsonObject(
 function extractOptionalMetaFromJson(
   input: RenderChunkProviderInput,
   o: Record<string, unknown>
-): Pick<
-  RenderChunkWithProviderSuccess,
-  'provider_meta' | 'state_out_payload' | 'embedding_meta'
-> {
-  const out: Pick<
-    RenderChunkWithProviderSuccess,
-    'provider_meta' | 'state_out_payload' | 'embedding_meta'
-  > = {}
-
-  const pm = pickPlainObjectMeta(o.provider_meta)
-  if (o.provider_meta !== undefined && pm == null) {
-    warnMetaIgnored(input, 'provider_meta')
-  } else if (pm != null && Object.keys(pm).length > 0) {
-    out.provider_meta = pm
-  }
-
-  const em = pickPlainObjectMeta(o.embedding_meta)
-  if (o.embedding_meta !== undefined && em == null) {
-    warnMetaIgnored(input, 'embedding_meta')
-  } else if (em != null && Object.keys(em).length > 0) {
-    out.embedding_meta = em
-  }
+): Pick<RenderChunkWithProviderSuccess, 'state_out_payload'> {
+  const out: Pick<RenderChunkWithProviderSuccess, 'state_out_payload'> = {}
 
   const rawState = o.state_out_payload
   const stateObj = pickPlainObjectMeta(rawState)
